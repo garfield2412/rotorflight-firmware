@@ -88,7 +88,7 @@ enum {
     DEBUG_FRAME_BUFFER,
 };
 
-#define TELEMETRY_BUFFER_SIZE    140
+#define TELEMETRY_BUFFER_SIZE    
 #define REQUEST_BUFFER_SIZE      64
 #define PARAM_BUFFER_SIZE        96
 #define PARAM_HEADER_SIZE        2
@@ -805,6 +805,115 @@ static void hw4SensorProcess(timeUs_t currentTimeUs)
 static uint8_t kontronikPacketLength    = 0;    // 40 or 38 byte
 static uint8_t kontronikCrcExclude      = 0;    // 0 or 2
 
+// Handshake state machine for Kontronik ESCs (legacy firmware without KODL stream support)
+typedef enum {
+    KON_HS_WAIT_PLUS = 0,
+    KON_HS_WAIT_AT,
+    KON_HS_WAIT_ATSN,
+    KON_HS_DONE
+} kon_hs_state_e;
+
+static kon_hs_state_e konHsState = KON_HS_WAIT_PLUS;
+
+// kleine Zeilen-Pufferung bis '\r'
+static char konHsLine[16];
+static uint8_t konHsPos = 0;
+
+// optional: Timeout, falls ESC "irgendwas" sendet und nie CR kommt
+static timeMs_t konHsLastByteMs = 0;
+
+static void kontronikHsReset(void)
+{
+    konHsState = KON_HS_WAIT_PLUS;
+    konHsPos = 0;
+    konHsLine[0] = '\0';
+    konHsLastByteMs = 0;
+}
+
+// send helper
+static inline void konHsSend(const char *s)
+{
+    serialWriteBuf(escSensorPort, (const uint8_t*)s, strlen(s));
+}
+
+/**
+ * @return true = Byte wurde für Handshake verbraucht (nicht an Binary-Parser weiterreichen)
+ *         false = Handshake ist fertig oder nicht relevant -> Caller darf normal weiter parsen
+ */
+static bool kontronikHandleNewHandshakeByte(uint8_t b, timeUs_t nowUs)
+{
+    // Wenn schon fertig: nicht mehr anfassen
+    if (konHsState == KON_HS_DONE)
+        return false;
+
+    // Heuristik: Wenn schon direkt KODL-Stream beginnt, sofort "fertig" setzen
+    // (erste Sync-Byte 0x4B)
+    if (b == 0x4B) {
+        konHsState = KON_HS_DONE;
+        konHsPos = 0;
+        return false; // dieses Byte muss der alte Parser sehen!
+    }
+
+    const timeMs_t nowMs = nowUs / 1000;
+
+    // Timeout: wenn > 1000ms kein vollständiges Kommando, line buffer verwerfen
+    if (konHsLastByteMs && (nowMs - konHsLastByteMs) > 1000) {
+        konHsPos = 0;
+        konHsLine[0] = '\0';
+    }
+    konHsLastByteMs = nowMs;
+
+    // ESC sendet CR-term. Wir ignorieren LF.
+    if (b == '\n') {
+        return true;
+    }
+
+    if (b != '\r') {
+        if (konHsPos < (sizeof(konHsLine) - 1)) {
+            konHsLine[konHsPos++] = (char)b;
+            konHsLine[konHsPos] = '\0';
+        } else {
+            // overflow -> reset line
+            konHsPos = 0;
+            konHsLine[0] = '\0';
+        }
+        return true;
+    }
+
+    // '\r' -> Zeile komplett
+    // konHsLine enthält z.B. "+++" oder "AT" oder "ATSN?"
+    if (konHsState == KON_HS_WAIT_PLUS) {
+        if (!strcmp(konHsLine, "+++")) {
+            konHsSend("\r\n");
+            konHsState = KON_HS_WAIT_AT;
+        }
+    }
+    else if (konHsState == KON_HS_WAIT_AT) {
+        if (!strcmp(konHsLine, "AT")) {
+            konHsSend("\r\nOK\r\n");
+            konHsState = KON_HS_WAIT_ATSN;
+        }
+    }
+    else if (konHsState == KON_HS_WAIT_ATSN) {
+        if (!strcmp(konHsLine, "ATSN?")) {
+            konHsSend("\r\nOK\r\n\r\nKONTRONIKBT\r\n");
+            konHsState = KON_HS_DONE;
+
+            // sauberer Übergang in den alten Parser
+            readBytes = 0;
+            syncCount = 0;
+            kontronikPacketLength = 0;
+            kontronikCrcExclude = 0;
+        }
+    }
+
+    // Zeilenbuffer reset für nächste Zeile
+    konHsPos = 0;
+    konHsLine[0] = '\0';
+
+    return true;
+}
+
 static uint32_t calculateCRC32(const uint8_t *ptr, size_t len)
 {
     uint32_t crc = 0xFFFFFFFF;
@@ -888,7 +997,15 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 {
     // check for any available bytes in the rx buffer
     while (serialRxBytesWaiting(escSensorPort)) {
-        if (processKontronikTelemetryStream(serialRead(escSensorPort))) {
+        uint8_t byte = serialRead(escSensorPort);
+
+        // 1) NEW: Handshake 
+        // if true -> Byte wurde verarbeitet und darf NICHT an den KODL-Parser
+        if (kontronikHandleNewHandshakeByte(byte, currentTimeUs)) {
+            continue;
+        }        
+        //old kontronik KODL+CRC32 stream
+        if (processKontronikTelemetryStream(byte)) {
             uint32_t crc = kontronikDecodeCRC(kontronikPacketLength - KON_CRC_LENGTH);
             if (calculateCRC32(buffer, kontronikPacketLength - kontronikCrcExclude - KON_CRC_LENGTH) == crc) {
                 uint32_t rpm = buffer[7] << 24 | buffer[6] << 16 | buffer[5] << 8 | buffer[4];
