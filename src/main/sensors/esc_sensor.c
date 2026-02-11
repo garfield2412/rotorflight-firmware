@@ -995,6 +995,11 @@ static bool processKontronikTelemetryStream(uint8_t dataByte)
 
 static void kontronikSensorProcess(timeUs_t currentTimeUs)
 {
+    static bool hsInitDone = false;
+    if (!hsInitDone) {
+        kontronikHsReset();
+        hsInitDone = true;
+    }
     // check for any available bytes in the rx buffer
     while (serialRxBytesWaiting(escSensorPort)) {
         uint8_t byte = serialRead(escSensorPort);
