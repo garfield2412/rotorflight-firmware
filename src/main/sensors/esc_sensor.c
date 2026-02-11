@@ -88,7 +88,7 @@ enum {
     DEBUG_FRAME_BUFFER,
 };
 
-#define TELEMETRY_BUFFER_SIZE    254
+#define TELEMETRY_BUFFER_SIZE    255
 #define REQUEST_BUFFER_SIZE      64
 #define PARAM_BUFFER_SIZE        96
 #define PARAM_HEADER_SIZE        2
@@ -805,7 +805,7 @@ static void hw4SensorProcess(timeUs_t currentTimeUs)
 static uint8_t kontronikPacketLength    = 0;    // 40 or 38 byte
 static uint8_t kontronikCrcExclude      = 0;    // 0 or 2
 
-// Handshake state machine for Kontronik ESCs (legacy firmware without KODL stream support)
+// Handshake state machine for Kontronik ESCs for Bidirectional Telemetry (BT)
 typedef enum {
     KON_HS_WAIT_PLUS = 0,
     KON_HS_WAIT_AT,
@@ -815,25 +815,93 @@ typedef enum {
 
 static kon_hs_state_e konHsState = KON_HS_WAIT_PLUS;
 
-// kleine Zeilen-Pufferung bis '\r'
-static char konHsLine[16];
-static uint8_t konHsPos = 0;
+// Handshake erst aktivieren, wenn wirklich '+' gesehen wurde (wichtig, damit Binary nicht geschluckt wird)
+static bool konHsArmed = false;
 
-// optional: Timeout, falls ESC "irgendwas" sendet und nie CR kommt
+// Command buffer wie Arduino (statt String)
+#define KON_HS_CMD_MAX 64
+static char konHsCmdBuf[KON_HS_CMD_MAX + 1];
+static uint8_t konHsCmdLen = 0;
+
 static timeMs_t konHsLastByteMs = 0;
 
 static void kontronikHsReset(void)
 {
     konHsState = KON_HS_WAIT_PLUS;
-    konHsPos = 0;
-    konHsLine[0] = '\0';
+    konHsArmed = false;
+    konHsCmdLen = 0;
+    konHsCmdBuf[0] = '\0';
     konHsLastByteMs = 0;
 }
 
-// send helper
 static inline void konHsSend(const char *s)
 {
     serialWriteBuf(escSensorPort, (const uint8_t*)s, strlen(s));
+}
+
+static uint8_t konHsSanitizeAndTrim(const char *in, uint8_t inLen, char *out, uint8_t outMax)
+{
+    // printable ASCII 32..126 übernehmen
+    uint8_t o = 0;
+    for (uint8_t i = 0; i < inLen && o < (uint8_t)(outMax - 1); i++) {
+        const uint8_t b = (uint8_t)in[i];
+        if (b >= 32 && b <= 126) {
+            out[o++] = (char)b;
+        }
+    }
+    out[o] = '\0';
+
+    // trim (spaces/tabs) vorne/hinten
+    uint8_t start = 0;
+    while (start < o && (out[start] == ' ' || out[start] == '\t'))
+        start++;
+
+    uint8_t end = o;
+    while (end > start && (out[end - 1] == ' ' || out[end - 1] == '\t'))
+        end--;
+
+    // nach vorne schieben, wenn nötig
+    if (start > 0) {
+        uint8_t n = 0;
+        for (uint8_t i = start; i < end; i++)
+            out[n++] = out[i];
+        out[n] = '\0';
+        return n;
+    }
+
+    out[end] = '\0';
+    return end;
+}
+
+static void konHsHandleLine(const char *raw, uint8_t rawLen)
+{
+    char line[32];
+    const uint8_t len = konHsSanitizeAndTrim(raw, rawLen, line, sizeof(line));
+    if (len == 0)
+        return;
+
+    if (konHsState == KON_HS_WAIT_PLUS && strcmp(line, "+++") == 0) {
+        konHsSend("\r\n");
+        konHsState = KON_HS_WAIT_AT;
+        return;
+    }
+    if (konHsState == KON_HS_WAIT_AT && strcmp(line, "AT") == 0) {
+        konHsSend("\r\nOK\r\n");
+        konHsState = KON_HS_WAIT_ATSN;
+        return;
+    }
+    if (konHsState == KON_HS_WAIT_ATSN && strcmp(line, "ATSN?") == 0) {
+        konHsSend("\r\nOK\r\n\r\nKONTRONIKBT\r\n");
+        konHsState = KON_HS_DONE;
+
+        // alten Parser sauber zurücksetzen
+        readBytes = 0;
+        syncCount = 0;
+        kontronikPacketLength = 0;
+        kontronikCrcExclude = 0;
+
+        return;
+    }
 }
 
 /**
@@ -842,74 +910,149 @@ static inline void konHsSend(const char *s)
  */
 static bool kontronikHandleNewHandshakeByte(uint8_t b, timeUs_t nowUs)
 {
-    // Wenn schon fertig: nicht mehr anfassen
+    // wenn fertig: nicht mehr anfassen
     if (konHsState == KON_HS_DONE)
         return false;
 
-    // Heuristik: Wenn schon direkt KODL-Stream beginnt, sofort "fertig" setzen
-    // (erste Sync-Byte 0x4B)
-    if (b == 0x4B) {
+    const timeMs_t nowMs = (timeMs_t)(nowUs / 1000);
+
+    // KODL nur erkennen, solange wir noch nicht im HS sind
+    if (!konHsArmed && konHsState == KON_HS_WAIT_PLUS && b == 0x4B) { // 'K'
         konHsState = KON_HS_DONE;
-        konHsPos = 0;
-        return false; // dieses Byte muss der alte Parser sehen!
+        konHsArmed = false;
+        konHsCmdLen = 0;
+        konHsCmdBuf[0] = '\0';
+        return false; // dieses Byte muss der Legacy-Parser sehen
     }
 
-    const timeMs_t nowMs = nowUs / 1000;
-
-    // Timeout: wenn > 1000ms kein vollständiges Kommando, line buffer verwerfen
-    if (konHsLastByteMs && (nowMs - konHsLastByteMs) > 1000) {
-        konHsPos = 0;
-        konHsLine[0] = '\0';
+    // TIMEOUT: wenn HS armed ist und dann passiert lange nichts -> HS aufgeben
+    // (Byte wegwerfen, weil wir mitten im HS waren)
+    if (konHsArmed && konHsLastByteMs && (nowMs - konHsLastByteMs) > 1000) {
+        kontronikHsReset();
+        return true;
     }
+
+    // Handshake erst aktivieren, wenn wirklich '+' gesehen wird
+    if (!konHsArmed) {
+        if (b == '+') {
+            konHsArmed = true;
+            konHsLastByteMs = nowMs;
+            konHsCmdLen = 0;
+            konHsCmdBuf[konHsCmdLen++] = (char)b;
+            konHsCmdBuf[konHsCmdLen] = '\0';
+            return true; // dieses '+' gehört zum HS
+        }
+        return false; // alles andere: Legacy-Parser bekommt es
+    }
+
+    // ab hier: HS ist armed -> Arduino-Logik übernehmen
     konHsLastByteMs = nowMs;
 
-    // ESC sendet CR-term. Wir ignorieren LF.
-    if (b == '\n') {
-        return true;
+    // führende Müllbytes ignorieren (wie Arduino)
+    if (konHsCmdLen == 0) {
+        if (b == 0xFF || b == 0x00)
+            return true;
+        if (b < 0x20 && b != '\r' && b != '\n')
+            return true;
     }
 
-    if (b != '\r') {
-        if (konHsPos < (sizeof(konHsLine) - 1)) {
-            konHsLine[konHsPos++] = (char)b;
-            konHsLine[konHsPos] = '\0';
-        } else {
-            // overflow -> reset line
-            konHsPos = 0;
-            konHsLine[0] = '\0';
+    if (b == '\r') {
+        if (konHsCmdLen > 0) {
+            konHsHandleLine(konHsCmdBuf, konHsCmdLen);
+            konHsCmdLen = 0;
+            konHsCmdBuf[0] = '\0';
         }
         return true;
     }
 
-    // '\r' -> Zeile komplett
-    // konHsLine enthält z.B. "+++" oder "AT" oder "ATSN?"
-    if (konHsState == KON_HS_WAIT_PLUS) {
-        if (!strcmp(konHsLine, "+++")) {
-            konHsSend("\r\n");
-            konHsState = KON_HS_WAIT_AT;
-        }
-    }
-    else if (konHsState == KON_HS_WAIT_AT) {
-        if (!strcmp(konHsLine, "AT")) {
-            konHsSend("\r\nOK\r\n");
-            konHsState = KON_HS_WAIT_ATSN;
-        }
-    }
-    else if (konHsState == KON_HS_WAIT_ATSN) {
-        if (!strcmp(konHsLine, "ATSN?")) {
-            konHsSend("\r\nOK\r\n\r\nKONTRONIKBT\r\n");
-            konHsState = KON_HS_DONE;
+    if (b == '\n')
+        return true;
 
-            // sauberer Übergang in den alten Parser
-            readBytes = 0;
-            syncCount = 0;
-            kontronikPacketLength = 0;
-            kontronikCrcExclude = 0;
-        }
+    // Zeichen sammeln
+    if (konHsCmdLen < KON_HS_CMD_MAX) {
+        konHsCmdBuf[konHsCmdLen++] = (char)b;
+        konHsCmdBuf[konHsCmdLen] = '\0';
+    } else {
+        // overflow -> wie Arduino: buffer leeren
+        konHsCmdLen = 0;
+        konHsCmdBuf[0] = '\0';
     }
 
-    // Zeilenbuffer reset für nächste Zeile
-    konHsPos = 0;
-    konHsLine[0] = '\0';
+    return true;
+}
+
+/**
+ * @return true = Byte wurde für Handshake verbraucht (nicht an Binary-Parser weiterreichen)
+ *         false = Handshake ist fertig oder nicht relevant -> Caller darf normal weiter parsen
+ */
+static bool kontronikHandleNewHandshakeByte(uint8_t b, timeUs_t nowUs)
+{
+    // wenn fertig: nicht mehr anfassen
+    if (konHsState == KON_HS_DONE)
+        return false;
+
+    // falls sofort Legacy KODL beginnt: HS abbrechen und Byte NICHT schlucken
+    if (b == 0x4B) { // 'K'
+        konHsState = KON_HS_DONE;
+        konHsArmed = false;
+        konHsCmdLen = 0;
+        konHsCmdBuf[0] = '\0';
+        return false;
+    }
+
+    const timeMs_t nowMs = (timeMs_t)(nowUs / 1000);
+
+    // TIMEOUT: wenn HS armed ist und dann passiert lange nichts sinnvolles -> HS aufgeben
+    if (konHsArmed && konHsLastByteMs && (nowMs - konHsLastByteMs) > 1000) {
+        kontronikHsReset();
+        return false; // Byte nicht schlucken, Legacy darf weiter versuchen
+    }
+
+    // Handshake erst aktivieren, wenn wirklich '+' gesehen wird
+    if (!konHsArmed) {
+        if (b == '+') {
+            konHsArmed = true;
+            konHsLastByteMs = nowMs;
+            konHsCmdLen = 0;
+            konHsCmdBuf[konHsCmdLen++] = (char)b;
+            konHsCmdBuf[konHsCmdLen] = '\0';
+            return true; // dieses '+' gehört zum HS
+        }
+        return false; // alles andere: Legacy-Parser bekommt es
+    }
+
+    // ab hier: HS ist armed -> Arduino-Logik übernehmen
+    konHsLastByteMs = nowMs;
+
+    // führende Müllbytes ignorieren (wie Arduino)
+    if (konHsCmdLen == 0) {
+        if (b == 0xFF || b == 0x00)
+            return true;
+        if (b < 0x20 && b != '\r' && b != '\n')
+            return true;
+    }
+
+    if (b == '\r') {
+        if (konHsCmdLen > 0) {
+            konHsHandleLine(konHsCmdBuf, konHsCmdLen);
+            konHsCmdLen = 0;
+            konHsCmdBuf[0] = '\0';
+        }
+        return true;
+    }
+
+    if (b == '\n')
+        return true;
+
+    // Zeichen sammeln
+    if (konHsCmdLen < KON_HS_CMD_MAX) {
+        konHsCmdBuf[konHsCmdLen++] = (char)b;
+        konHsCmdBuf[konHsCmdLen] = '\0';
+    } else {
+        // overflow -> wie Arduino: buffer leeren
+        konHsCmdLen = 0;
+        konHsCmdBuf[0] = '\0';
+    }
 
     return true;
 }
