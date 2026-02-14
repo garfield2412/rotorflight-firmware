@@ -741,7 +741,7 @@ static void hw4SensorProcess(timeUs_t currentTimeUs)
     checkFrameTimeout(currentTimeUs, 500000);
 }
 
-
+#if 0
 /*
  * Kontronik Telemetry V4 (23.11.2018)
  *
@@ -938,6 +938,346 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
             else {
                 totalCrcErrorCount++;
             }
+        }
+    }
+
+    checkFrameTimeout(currentTimeUs, 500000);
+}
+#endif
+
+// -----------------------------------------------------------------------------
+// Kontronik UART telemetry:
+//  - Full duplex, 115200 8N1
+//  - ESC boot handshake:
+//      +++\r   -> \r\n
+//      AT\r    -> \r\nOK\r\n
+//      ATSN?\r -> \r\nOK\r\n\r\nKONTRONIKBT\r\n
+//  - Telemetry frame format:
+//      0: 0xA7 (SOF), 1: frame type ASCII, payload ASCII, 0x0A (LF, EOF)
+// -----------------------------------------------------------------------------
+
+#ifndef KONTRONIK_RXLINE_MAX
+#define KONTRONIK_RXLINE_MAX            192
+#endif
+
+#ifndef KONTRONIK_RXCMD_MAX
+#define KONTRONIK_RXCMD_MAX             16
+#endif
+
+#ifndef KONTRONIK_PARAM_PAYLOAD_LENGTH
+#define KONTRONIK_PARAM_PAYLOAD_LENGTH  85
+#endif
+
+#define KONTRONIK_SOF                   0xA7
+#define KONTRONIK_EOF                   0x0A
+
+#define KONTRONIK_PARAM_ESC_SIG_OFFSET      0
+#define KONTRONIK_PARAM_ESC_CMD_OFFSET      1
+#define KONTRONIK_PARAM_ESC_MODEL_OFFSET    2
+#define KONTRONIK_PARAM_ESC_MODEL_LEN       16
+
+typedef enum {
+    KHS_OFF = 0,
+    KHS_ACTIVE,
+} kontronikHandshakeState_e;
+
+static kontronikHandshakeState_e konHsState = KHS_OFF;
+static bool konHsSawPlus = false;
+static bool konHsDone = false;
+
+static char konCmd[KONTRONIK_RXCMD_MAX];
+static uint8_t konCmdLen = 0;
+
+static uint8_t konFrame[KONTRONIK_RXLINE_MAX];
+static uint16_t konFrameLen = 0;
+static bool konFrameActive = false;
+
+static void konHsResetCmd(void)
+{
+    konCmdLen = 0;
+    konCmd[0] = '\0';
+}
+
+static void konFrameReset(void)
+{
+    konFrameLen = 0;
+    konFrameActive = false;
+}
+
+static void konHsWrite(const char *s)
+{
+    if (!escSensorPort || !s) {
+        return;
+    }
+    const uint8_t len = (uint8_t)strlen(s);
+    serialWriteBuf(escSensorPort, (const uint8_t *)s, len);
+}
+
+static void konHsStoreEscModel(const char *model)
+{
+    if (!model || !*model) {
+        return;
+    }
+
+    uint8_t modelLen = 0;
+    while (model[modelLen] &&
+           model[modelLen] != ';' &&
+           model[modelLen] != '\r' &&
+           model[modelLen] != '\n' &&
+           modelLen < KONTRONIK_PARAM_ESC_MODEL_LEN) {
+        if ((uint8_t)model[modelLen] < 0x20) {
+            break;
+        }
+        modelLen++;
+    }
+
+    if (modelLen == 0) {
+        return;
+    }
+
+    memset(paramPayload, 0, KONTRONIK_PARAM_PAYLOAD_LENGTH);
+    paramPayload[KONTRONIK_PARAM_ESC_SIG_OFFSET] = ESC_SIG_KON;
+    paramPayload[KONTRONIK_PARAM_ESC_CMD_OFFSET] = 0;
+    memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, model, modelLen);
+    paramPayloadLength = KONTRONIK_PARAM_PAYLOAD_LENGTH;
+}
+
+static void konHsHandleCommand(void)
+{
+    if (konCmdLen == 0) {
+        return;
+    }
+
+    if (strcmp(konCmd, "+++") == 0) {
+        konHsSawPlus = true;
+        konHsDone = false;
+        konHsWrite("\r\n");
+        return;
+    }
+
+    if (konHsSawPlus && strcmp(konCmd, "AT") == 0) {
+        konHsWrite("\r\nOK\r\n");
+        return;
+    }
+
+    if (konHsSawPlus && strcmp(konCmd, "ATSN?") == 0) {
+        konHsWrite("\r\nOK\r\n\r\nKONTRONIKBT\r\n");
+        konHsDone = true;
+        return;
+    }
+}
+
+static void kontronikConsumeHandshakeByte(const uint8_t dataByte)
+{
+    if (dataByte == '\n') {
+        return;
+    }
+
+    if (dataByte == '\r') {
+        if (konCmdLen > 0) {
+            konHsHandleCommand();
+            konHsResetCmd();
+        }
+        return;
+    }
+
+    if (dataByte >= 0x20 && dataByte <= 0x7E && konCmdLen < (KONTRONIK_RXCMD_MAX - 1)) {
+        konCmd[konCmdLen++] = (char)dataByte;
+        konCmd[konCmdLen] = '\0';
+    } else {
+        konHsResetCmd();
+    }
+}
+
+static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameLen, timeUs_t currentTimeUs)
+{
+    if (!frame || frameLen < 3 || frame[0] != KONTRONIK_SOF) {
+        return;
+    }
+
+    const char frameType = (char)frame[1];
+    if (frameType != 'R' && frameType != 'A') {
+        return;
+    }
+
+    char payload[KONTRONIK_RXLINE_MAX];
+    uint16_t payloadLen = 0;
+    for (uint16_t i = 2; i < frameLen && payloadLen < (KONTRONIK_RXLINE_MAX - 1); i++) {
+        const uint8_t b = frame[i];
+        if (b == '\r' || b == '\n') {
+            break;
+        }
+        if (b >= 0x20 && b <= 0x7E) {
+            payload[payloadLen++] = (char)b;
+        }
+    }
+    payload[payloadLen] = '\0';
+    if (payloadLen == 0) {
+        return;
+    }
+
+    bool gotTelemetry = false;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(payload, ";", &saveptr); tok; tok = strtok_r(NULL, ";", &saveptr)) {
+        while (*tok == ' ') {
+            tok++;
+        }
+        if (*tok == '\0') {
+            continue;
+        }
+
+        if (strncmp(tok, "--R=", 4) == 0) {
+            konHsStoreEscModel(tok + 4);
+            continue;
+        }
+
+        char *eq = strchr(tok, '=');
+        if (!eq) {
+            continue;
+        }
+
+        *eq = '\0';
+        const int key = atoi(tok);
+        char *val = eq + 1;
+        while (*val == ' ') {
+            val++;
+        }
+
+        char *endptr = NULL;
+        const float fval = strtof(val, &endptr);
+        if (endptr == val) {
+            continue;
+        }
+
+        if (frameType == 'R') {
+            // Frame 8 mapping to legacy Kontronik telemetry fields.
+            switch (key) {
+            case 10:
+                escSensorData[0].bec_voltage = (uint16_t)lrintf(fval * 1000.0f);
+                gotTelemetry = true;
+                break;
+            case 11:
+                escSensorData[0].bec_current = (uint16_t)lrintf(fval * 1000.0f);
+                gotTelemetry = true;
+                break;
+            case 12:
+                escSensorData[0].temperature2 = (int16_t)lrintf(fval * 10.0f);
+                gotTelemetry = true;
+                break;
+            case 13: {
+                int mapped = (lrintf(fval) + 100) * 5;
+                mapped = constrain(mapped, 0, 1000);
+                escSensorData[0].throttle = mapped;
+                gotTelemetry = true;
+                break;
+            }
+            case 14:
+                escSensorData[0].erpm = (fval > 0.0f) ? (uint32_t)lrintf(fval) : 0;
+                gotTelemetry = true;
+                break;
+            case 15:
+                escSensorData[0].pwm = (uint16_t)lrintf(fval * 10.0f);
+                gotTelemetry = true;
+                break;
+            case 16:
+                escSensorData[0].temperature = (int16_t)lrintf(fval * 10.0f);
+                gotTelemetry = true;
+                break;
+            case 20:
+                escSensorData[0].status = (uint32_t)lrintf(fval);
+                gotTelemetry = true;
+                break;
+            default:
+                break;
+            }
+        } else {
+            // Frame 7 (A) keeps legacy battery fields populated.
+            switch (key) {
+            case 2:
+                escSensorData[0].voltage = applyVoltageCorrection((uint16_t)lrintf(fval * 1000.0f));
+                gotTelemetry = true;
+                break;
+            case 3:
+                escSensorData[0].current = applyCurrentCorrection((uint16_t)lrintf(fval * 1000.0f));
+                setConsumptionCurrent(fval);
+                gotTelemetry = true;
+                break;
+            case 4:
+                escSensorData[0].consumption = applyConsumptionCorrection((uint32_t)lrintf(fval));
+                gotTelemetry = true;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    if (gotTelemetry) {
+        escSensorData[0].id = ESC_SIG_KON;
+        escSensorData[0].age = 0;
+        dataUpdateUs = currentTimeUs;
+        totalFrameCount++;
+    }
+}
+
+static void kontronikHandshakeOnlyInit(timeUs_t nowUs)
+{
+    UNUSED(nowUs);
+    konHsState = KHS_ACTIVE;
+    konHsSawPlus = false;
+    konHsDone = false;
+    konHsResetCmd();
+    konFrameReset();
+}
+
+static void kontronikSensorProcess(timeUs_t currentTimeUs)
+{
+    if (!escSensorPort) {
+        return;
+    }
+
+    if (konHsState == KHS_OFF) {
+        kontronikHandshakeOnlyInit(currentTimeUs);
+    }
+
+    while (serialRxBytesWaiting(escSensorPort)) {
+        const uint8_t dataByte = serialRead(escSensorPort);
+        totalByteCount++;
+
+        if (!konHsDone) {
+            kontronikConsumeHandshakeByte(dataByte);
+            continue;
+        }
+
+        if (!konFrameActive) {
+            if (dataByte == KONTRONIK_SOF) {
+                konFrameActive = true;
+                konFrameLen = 0;
+                konFrame[konFrameLen++] = dataByte;
+                syncCount++;
+            }
+            continue;
+        }
+
+        if (dataByte == KONTRONIK_SOF) {
+            frameSyncError();
+            konFrameLen = 0;
+            konFrame[konFrameLen++] = dataByte;
+            syncCount++;
+            continue;
+        }
+
+        if (konFrameLen >= KONTRONIK_RXLINE_MAX) {
+            frameSyncError();
+            konFrameReset();
+            continue;
+        }
+
+        konFrame[konFrameLen++] = dataByte;
+
+        if (dataByte == KONTRONIK_EOF) {
+            kontronikParseAsciiFrame(konFrame, konFrameLen, currentTimeUs);
+            konFrameReset();
         }
     }
 
@@ -3668,7 +4008,7 @@ static void castleSensorProcess(timeUs_t currentTimeUs)
 
 void escSensorProcess(timeUs_t currentTimeUs)
 {
-    if (escSensorPort && motorIsEnabled()) {
+    if (escSensorPort && (motorIsEnabled() || escSensorConfig()->protocol == ESC_SENSOR_PROTO_KONTRONIK)) {
         switch (escSensorConfig()->protocol) {
             case ESC_SENSOR_PROTO_BLHELI32:
                 blSensorProcess(currentTimeUs);
@@ -3788,7 +4128,6 @@ bool INIT_CODE escSensorInit(void)
             break;
         case ESC_SENSOR_PROTO_KONTRONIK:
             baudrate = 115200;
-            options |= SERIAL_PARITY_EVEN;
             break;
         case ESC_SENSOR_PROTO_OMPHOBBY:
             callback = xdflySensorInit(ESC_SIG_OMP);
@@ -3827,7 +4166,15 @@ bool INIT_CODE escSensorInit(void)
     }
 
     if (baudrate) {
-        escSensorPort = openSerialPort(portConfig->identifier, FUNCTION_ESC_SENSOR, callback, NULL, baudrate, escHalfDuplex ? MODE_RXTX : MODE_RX, options);
+        const portMode_e mode = (escSensorConfig()->protocol == ESC_SENSOR_PROTO_KONTRONIK) ? MODE_RXTX : (escHalfDuplex ? MODE_RXTX : MODE_RX);
+        escSensorPort = openSerialPort(portConfig->identifier, FUNCTION_ESC_SENSOR, callback, NULL, baudrate, mode, options);
+    }
+
+    if (escSensorPort && escSensorConfig()->protocol == ESC_SENSOR_PROTO_KONTRONIK) {
+        // Start handshake lazily in kontronikSensorProcess() with valid currentTimeUs.
+        konHsState = KHS_OFF;
+        konFrameReset();
+        konHsResetCmd();
     }
 
     escSensorCommonInit();
