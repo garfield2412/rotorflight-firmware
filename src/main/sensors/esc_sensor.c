@@ -1193,38 +1193,6 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
                 }
                 kontronikWriteParamU16(KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET, (uint16_t)value);
                 break;
-            case KONTRONIK_REG_MAX_DISCHARGE:
-                kontronikEnsureParamPayload();
-                if (value > UINT16_MAX) {
-                    value = UINT16_MAX;
-                }
-                kontronikWriteParamU16(KONTRONIK_PARAM_MAX_DISCHARGE_OFFSET, (uint16_t)value);
-                break;
-            case KONTRONIK_REG_MIN_INPUT_VOLTAGE:
-                kontronikEnsureParamPayload();
-                if (value > UINT16_MAX) {
-                    value = UINT16_MAX;
-                }
-                kontronikWriteParamU16(KONTRONIK_PARAM_MIN_INPUT_VOLT_OFFSET, (uint16_t)value);
-                break;
-            case KONTRONIK_REG_MAX_MOTOR_CURRENT:
-                kontronikEnsureParamPayload();
-                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_MOTOR_CURR_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
-                break;
-            case KONTRONIK_REG_MAX_ESC_TEMP:
-                kontronikEnsureParamPayload();
-                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_ESC_TEMP_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
-                break;
-            case KONTRONIK_REG_MAX_BEC_TEMP:
-                kontronikEnsureParamPayload();
-                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_BEC_TEMP_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
-                break;
-            case KONTRONIK_REG_MAX_BEC_CURRENT:
-                kontronikEnsureParamPayload();
-                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_BEC_CURRENT_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
-                break;
-            default:
-                break;
             }
         }
         return;
