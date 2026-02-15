@@ -977,6 +977,22 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_ESC_VERSION_LEN     16
 #define KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET (KONTRONIK_PARAM_ESC_VERSION_OFFSET + KONTRONIK_PARAM_ESC_VERSION_LEN)
 #define KONTRONIK_PARAM_ESC_FIRMWARE_LEN    16
+#define KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET  (KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET + KONTRONIK_PARAM_ESC_FIRMWARE_LEN)
+#define KONTRONIK_PARAM_ROTATION_OFFSET     (KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET + 2)
+#define KONTRONIK_PARAM_FWD_BCKWD_OFFSET    (KONTRONIK_PARAM_ROTATION_OFFSET + 1)
+#define KONTRONIK_PARAM_FLIGHT_MODE_OFFSET  (KONTRONIK_PARAM_FWD_BCKWD_OFFSET + 1)
+#define KONTRONIK_PARAM_BATTERY_TYPE_OFFSET (KONTRONIK_PARAM_FLIGHT_MODE_OFFSET + 1)
+#define KONTRONIK_PARAM_UNDERVOLT_BEHAVIOR_OFFSET (KONTRONIK_PARAM_BATTERY_TYPE_OFFSET + 1)
+#define KONTRONIK_PARAM_UNDERVOLT_CELL_OFFSET     (KONTRONIK_PARAM_UNDERVOLT_BEHAVIOR_OFFSET + 1)
+#define KONTRONIK_PARAM_DISCHARGE_LIMITER_OFFSET  (KONTRONIK_PARAM_UNDERVOLT_CELL_OFFSET + 2)
+#define KONTRONIK_PARAM_DISCHARGE_LIMIT_OFFSET    (KONTRONIK_PARAM_DISCHARGE_LIMITER_OFFSET + 1)
+#define KONTRONIK_PARAM_POLE_NUMBER_OFFSET        (KONTRONIK_PARAM_DISCHARGE_LIMIT_OFFSET + 2)
+#define KONTRONIK_PARAM_GEAR_RATIO_OFFSET         (KONTRONIK_PARAM_POLE_NUMBER_OFFSET + 1)
+
+// Kontronik parameter register IDs (from frame type 'E').
+#define KONTRONIK_REG_BEC_VOLTAGE           8208
+#define KONTRONIK_REG_POLE_NUMBER           8264
+#define KONTRONIK_REG_GEAR_RATIO            8266
 
 typedef enum {
     KHS_OFF = 0,
@@ -1015,6 +1031,25 @@ static void konHsWrite(const char *s)
     serialWriteBuf(escSensorPort, (const uint8_t *)s, len);
 }
 
+static void kontronikEnsureParamPayload(void)
+{
+    if (paramPayloadLength != KONTRONIK_PARAM_PAYLOAD_LENGTH) {
+        memset(paramPayload, 0, KONTRONIK_PARAM_PAYLOAD_LENGTH);
+        paramPayloadLength = KONTRONIK_PARAM_PAYLOAD_LENGTH;
+    }
+}
+
+static inline void kontronikWriteParamU16(uint16_t offset, uint16_t value)
+{
+    paramPayload[offset] = (uint8_t)(value & 0xFF);
+    paramPayload[offset + 1] = (uint8_t)(value >> 8);
+}
+
+static inline void kontronikWriteParamU8(uint16_t offset, uint8_t value)
+{
+    paramPayload[offset] = value;
+}
+
 static void konHsStoreEscModel(const char *model)
 {
     if (!model || !*model) {
@@ -1037,11 +1072,11 @@ static void konHsStoreEscModel(const char *model)
         return;
     }
 
-    memset(paramPayload, 0, KONTRONIK_PARAM_PAYLOAD_LENGTH);
+    kontronikEnsureParamPayload();
+    memset(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, 0, KONTRONIK_PARAM_ESC_MODEL_LEN);
     memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, model, modelLen);
     memset(paramPayload + KONTRONIK_PARAM_ESC_VERSION_OFFSET, 0, KONTRONIK_PARAM_ESC_VERSION_LEN);
     memset(paramPayload + KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET, 0, KONTRONIK_PARAM_ESC_FIRMWARE_LEN);
-    paramPayloadLength = KONTRONIK_PARAM_PAYLOAD_LENGTH;
 }
 
 static void konHsHandleCommand(void)
@@ -1098,7 +1133,7 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
 
     const char frameType = (char)frame[1];
-    if (frameType != 'R' && frameType != 'A' && frameType != 'M' && frameType != 'G') {
+    if (frameType != 'R' && frameType != 'A' && frameType != 'M' && frameType != 'G' && frameType != 'E') {
         return;
     }
 
@@ -1126,6 +1161,63 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
             escSensorData[0].age = 0;
             dataUpdateUs = currentTimeUs;
             totalFrameCount++;
+        }
+        return;
+    }
+
+    if (frameType == 'E') {
+        char *saveptr = NULL;
+        for (char *tok = strtok_r(payload, ";", &saveptr); tok; tok = strtok_r(NULL, ";", &saveptr)) {
+            while (*tok == ' ') {
+                tok++;
+            }
+            if (*tok == '\0') {
+                continue;
+            }
+
+            char *colon = strchr(tok, ':');
+            if (!colon) {
+                continue;
+            }
+
+            *colon = '\0';
+            char *valStr = tok;
+            char *regStr = colon + 1;
+
+            char *endptr = NULL;
+            uint32_t value = (uint32_t)strtoul(valStr, &endptr, 10);
+            if (endptr == valStr) {
+                continue;
+            }
+
+            endptr = NULL;
+            uint32_t reg = (uint32_t)strtoul(regStr, &endptr, 10);
+            if (endptr == regStr) {
+                continue;
+            }
+
+            switch (reg) {
+            case KONTRONIK_REG_BEC_VOLTAGE:
+                kontronikEnsureParamPayload();
+                if (value > UINT16_MAX) {
+                    value = UINT16_MAX;
+                }
+                kontronikWriteParamU16(KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET, (uint16_t)value);
+                break;
+            case KONTRONIK_REG_POLE_NUMBER:
+                kontronikEnsureParamPayload();
+                kontronikWriteParamU8(KONTRONIK_PARAM_POLE_NUMBER_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
+                break;
+            case KONTRONIK_REG_GEAR_RATIO:
+                kontronikEnsureParamPayload();
+                if (value > UINT16_MAX) {
+                    value = UINT16_MAX;
+                }
+                kontronikWriteParamU16(KONTRONIK_PARAM_GEAR_RATIO_OFFSET, (uint16_t)value);
+                break;
+            default:
+                break;
+            }
         }
         return;
     }
