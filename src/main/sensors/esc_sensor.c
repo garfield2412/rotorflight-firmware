@@ -4303,6 +4303,8 @@ bool INIT_CODE escSensorInit(void)
         konHsState = KHS_OFF;
         konFrameReset();
         konHsResetCmd();
+        // Ensure we always return a buffer for MSP reads, even before first frames arrive.
+        kontronikEnsureParamPayload();
     }
 
     escSensorCommonInit();
