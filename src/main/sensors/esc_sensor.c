@@ -978,21 +978,21 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET (KONTRONIK_PARAM_ESC_VERSION_OFFSET + KONTRONIK_PARAM_ESC_VERSION_LEN)
 #define KONTRONIK_PARAM_ESC_FIRMWARE_LEN    16
 #define KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET  (KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET + KONTRONIK_PARAM_ESC_FIRMWARE_LEN)
-#define KONTRONIK_PARAM_ROTATION_OFFSET     (KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET + 2)
-#define KONTRONIK_PARAM_FWD_BCKWD_OFFSET    (KONTRONIK_PARAM_ROTATION_OFFSET + 1)
-#define KONTRONIK_PARAM_FLIGHT_MODE_OFFSET  (KONTRONIK_PARAM_FWD_BCKWD_OFFSET + 1)
-#define KONTRONIK_PARAM_BATTERY_TYPE_OFFSET (KONTRONIK_PARAM_FLIGHT_MODE_OFFSET + 1)
-#define KONTRONIK_PARAM_UNDERVOLT_BEHAVIOR_OFFSET (KONTRONIK_PARAM_BATTERY_TYPE_OFFSET + 1)
-#define KONTRONIK_PARAM_UNDERVOLT_CELL_OFFSET     (KONTRONIK_PARAM_UNDERVOLT_BEHAVIOR_OFFSET + 1)
-#define KONTRONIK_PARAM_DISCHARGE_LIMITER_OFFSET  (KONTRONIK_PARAM_UNDERVOLT_CELL_OFFSET + 2)
-#define KONTRONIK_PARAM_DISCHARGE_LIMIT_OFFSET    (KONTRONIK_PARAM_DISCHARGE_LIMITER_OFFSET + 1)
-#define KONTRONIK_PARAM_POLE_NUMBER_OFFSET        (KONTRONIK_PARAM_DISCHARGE_LIMIT_OFFSET + 2)
-#define KONTRONIK_PARAM_GEAR_RATIO_OFFSET         (KONTRONIK_PARAM_POLE_NUMBER_OFFSET + 1)
+#define KONTRONIK_PARAM_MAX_DISCHARGE_OFFSET     (KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET + 31)
+#define KONTRONIK_PARAM_MIN_INPUT_VOLT_OFFSET    (KONTRONIK_PARAM_MAX_DISCHARGE_OFFSET + 2)
+#define KONTRONIK_PARAM_MAX_MOTOR_CURR_OFFSET    (KONTRONIK_PARAM_MIN_INPUT_VOLT_OFFSET + 2)
+#define KONTRONIK_PARAM_MAX_ESC_TEMP_OFFSET      (KONTRONIK_PARAM_MAX_MOTOR_CURR_OFFSET + 1)
+#define KONTRONIK_PARAM_MAX_BEC_TEMP_OFFSET      (KONTRONIK_PARAM_MAX_ESC_TEMP_OFFSET + 1)
+#define KONTRONIK_PARAM_MAX_BEC_CURRENT_OFFSET   (KONTRONIK_PARAM_MAX_BEC_TEMP_OFFSET + 1)
 
 // Kontronik parameter register IDs (from frame type 'E').
 #define KONTRONIK_REG_BEC_VOLTAGE           8208
-#define KONTRONIK_REG_POLE_NUMBER           8264
-#define KONTRONIK_REG_GEAR_RATIO            8266
+#define KONTRONIK_REG_MIN_INPUT_VOLTAGE     8268
+#define KONTRONIK_REG_MAX_MOTOR_CURRENT     8270
+#define KONTRONIK_REG_MAX_ESC_TEMP          8272
+#define KONTRONIK_REG_MAX_BEC_TEMP          8274
+#define KONTRONIK_REG_MAX_BEC_CURRENT       8276
+#define KONTRONIK_REG_MAX_DISCHARGE         8278
 
 typedef enum {
     KHS_OFF = 0,
@@ -1204,16 +1204,35 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
                 }
                 kontronikWriteParamU16(KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET, (uint16_t)value);
                 break;
-            case KONTRONIK_REG_POLE_NUMBER:
-                kontronikEnsureParamPayload();
-                kontronikWriteParamU8(KONTRONIK_PARAM_POLE_NUMBER_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
-                break;
-            case KONTRONIK_REG_GEAR_RATIO:
+            case KONTRONIK_REG_MAX_DISCHARGE:
                 kontronikEnsureParamPayload();
                 if (value > UINT16_MAX) {
                     value = UINT16_MAX;
                 }
-                kontronikWriteParamU16(KONTRONIK_PARAM_GEAR_RATIO_OFFSET, (uint16_t)value);
+                kontronikWriteParamU16(KONTRONIK_PARAM_MAX_DISCHARGE_OFFSET, (uint16_t)value);
+                break;
+            case KONTRONIK_REG_MIN_INPUT_VOLTAGE:
+                kontronikEnsureParamPayload();
+                if (value > UINT16_MAX) {
+                    value = UINT16_MAX;
+                }
+                kontronikWriteParamU16(KONTRONIK_PARAM_MIN_INPUT_VOLT_OFFSET, (uint16_t)value);
+                break;
+            case KONTRONIK_REG_MAX_MOTOR_CURRENT:
+                kontronikEnsureParamPayload();
+                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_MOTOR_CURR_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
+                break;
+            case KONTRONIK_REG_MAX_ESC_TEMP:
+                kontronikEnsureParamPayload();
+                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_ESC_TEMP_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
+                break;
+            case KONTRONIK_REG_MAX_BEC_TEMP:
+                kontronikEnsureParamPayload();
+                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_BEC_TEMP_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
+                break;
+            case KONTRONIK_REG_MAX_BEC_CURRENT:
+                kontronikEnsureParamPayload();
+                kontronikWriteParamU8(KONTRONIK_PARAM_MAX_BEC_CURRENT_OFFSET, (uint8_t)constrain(value, 0, UINT8_MAX));
                 break;
             default:
                 break;
