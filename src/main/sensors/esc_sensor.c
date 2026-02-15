@@ -965,18 +965,18 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #endif
 
 #ifndef KONTRONIK_PARAM_PAYLOAD_LENGTH
-#define KONTRONIK_PARAM_PAYLOAD_LENGTH  85
+#define KONTRONIK_PARAM_PAYLOAD_LENGTH  99
 #endif
 
 #define KONTRONIK_SOF                   0xA7
 #define KONTRONIK_EOF                   0x0A
 
-#define KONTRONIK_PARAM_ESC_SIG_OFFSET      0
-#define KONTRONIK_PARAM_ESC_CMD_OFFSET      1
-#define KONTRONIK_PARAM_ESC_MODEL_OFFSET    2
+#define KONTRONIK_PARAM_ESC_MODEL_OFFSET    0
 #define KONTRONIK_PARAM_ESC_MODEL_LEN       16
 #define KONTRONIK_PARAM_ESC_VERSION_OFFSET  (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
 #define KONTRONIK_PARAM_ESC_VERSION_LEN     16
+#define KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET (KONTRONIK_PARAM_ESC_VERSION_OFFSET + KONTRONIK_PARAM_ESC_VERSION_LEN)
+#define KONTRONIK_PARAM_ESC_FIRMWARE_LEN    16
 
 typedef enum {
     KHS_OFF = 0,
@@ -1038,10 +1038,9 @@ static void konHsStoreEscModel(const char *model)
     }
 
     memset(paramPayload, 0, KONTRONIK_PARAM_PAYLOAD_LENGTH);
-    paramPayload[KONTRONIK_PARAM_ESC_SIG_OFFSET] = ESC_SIG_KON;
-    paramPayload[KONTRONIK_PARAM_ESC_CMD_OFFSET] = 0;
     memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, model, modelLen);
     memset(paramPayload + KONTRONIK_PARAM_ESC_VERSION_OFFSET, 0, KONTRONIK_PARAM_ESC_VERSION_LEN);
+    memset(paramPayload + KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET, 0, KONTRONIK_PARAM_ESC_FIRMWARE_LEN);
     paramPayloadLength = KONTRONIK_PARAM_PAYLOAD_LENGTH;
 }
 
@@ -4144,6 +4143,7 @@ bool INIT_CODE escSensorInit(void)
             baudrate = 38400;
             break;
         case ESC_SENSOR_PROTO_KONTRONIK:
+            escSig = ESC_SIG_KON;
             baudrate = 115200;
             break;
         case ESC_SENSOR_PROTO_OMPHOBBY:
