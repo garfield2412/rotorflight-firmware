@@ -975,6 +975,8 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_ESC_CMD_OFFSET      1
 #define KONTRONIK_PARAM_ESC_MODEL_OFFSET    2
 #define KONTRONIK_PARAM_ESC_MODEL_LEN       16
+#define KONTRONIK_PARAM_ESC_VERSION_OFFSET  (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
+#define KONTRONIK_PARAM_ESC_VERSION_LEN     16
 
 typedef enum {
     KHS_OFF = 0,
@@ -1039,6 +1041,7 @@ static void konHsStoreEscModel(const char *model)
     paramPayload[KONTRONIK_PARAM_ESC_SIG_OFFSET] = ESC_SIG_KON;
     paramPayload[KONTRONIK_PARAM_ESC_CMD_OFFSET] = 0;
     memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, model, modelLen);
+    memset(paramPayload + KONTRONIK_PARAM_ESC_VERSION_OFFSET, 0, KONTRONIK_PARAM_ESC_VERSION_LEN);
     paramPayloadLength = KONTRONIK_PARAM_PAYLOAD_LENGTH;
 }
 
@@ -1096,7 +1099,7 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
 
     const char frameType = (char)frame[1];
-    if (frameType != 'R' && frameType != 'A') {
+    if (frameType != 'R' && frameType != 'A' && frameType != 'M' && frameType != 'G') {
         return;
     }
 
@@ -1113,6 +1116,18 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
     payload[payloadLen] = '\0';
     if (payloadLen == 0) {
+        return;
+    }
+
+    if (frameType == 'G') {
+        const int pwmUs = atoi(payload);
+        if (pwmUs > 0) {
+            escSensorData[0].pwm = (uint16_t)constrain(pwmUs * 10, 0, UINT16_MAX);
+            escSensorData[0].id = ESC_SIG_KON;
+            escSensorData[0].age = 0;
+            dataUpdateUs = currentTimeUs;
+            totalFrameCount++;
+        }
         return;
     }
 
@@ -1171,20 +1186,22 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
                 gotTelemetry = true;
                 break;
             }
-            case 14:
-                escSensorData[0].erpm = (fval > 0.0f) ? (uint32_t)lrintf(fval) : 0;
-                gotTelemetry = true;
-                break;
-            case 15:
-                escSensorData[0].pwm = (uint16_t)lrintf(fval * 10.0f);
-                gotTelemetry = true;
-                break;
             case 16:
                 escSensorData[0].temperature = (int16_t)lrintf(fval * 10.0f);
                 gotTelemetry = true;
                 break;
             case 20:
                 escSensorData[0].status = (uint32_t)lrintf(fval);
+                gotTelemetry = true;
+                break;
+            default:
+                break;
+            }
+        } else if (frameType == 'M') {
+            // Frame 6 carries actual motor values; use RPM as primary erpm source.
+            switch (key) {
+            case 5:
+                escSensorData[0].erpm = (fval > 0.0f) ? (uint32_t)lrintf(fval) : 0;
                 gotTelemetry = true;
                 break;
             default:

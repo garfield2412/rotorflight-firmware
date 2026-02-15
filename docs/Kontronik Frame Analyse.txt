@@ -1,3 +1,16 @@
+The Kontronik ESCs (Kosmik and Jive pro) are utilizing a full duplex 8 bit 115200 1 stop bit no parity 3.3v UART communication via the JST-ZH1.5 5 pin connector.
+
+The ESC uses the built in module AT commands to check the presens of the bluetooth module. Once the module reply to those commands the ESC starts sending data and telemetry.
+On the boot phase, the ESC sends 3 AT commands and wait for response from the module.
+    +++\r
+    response: \r\n
+    AT\r
+    response: \r\nOK\r\n
+    ATSN?\r
+    response: \r\nOK\r\n\r\nKONTRONIKBT\r\n
+
+After the Handshake these Frames are sent
+
 RAW (Full string of Frame 1-8) = Full Dump of Receive String
 Every Frame starts with A7 (SOF) and ends with 0A (EOF/ LF)
 A7 47 31 31 30 31 0A 
