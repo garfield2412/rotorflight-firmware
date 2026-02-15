@@ -90,7 +90,7 @@ enum {
 
 #define TELEMETRY_BUFFER_SIZE    140
 #define REQUEST_BUFFER_SIZE      64
-#define PARAM_BUFFER_SIZE        96
+#define PARAM_BUFFER_SIZE        200
 #define PARAM_HEADER_SIZE        2
 #define PARAM_HEADER_SIG         0
 #define PARAM_HEADER_VER         1
@@ -977,11 +977,6 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_ESC_VERSION_LEN     16
 #define KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET (KONTRONIK_PARAM_ESC_VERSION_OFFSET + KONTRONIK_PARAM_ESC_VERSION_LEN)
 #define KONTRONIK_PARAM_ESC_FIRMWARE_LEN    16
-#define KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET  (KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET + KONTRONIK_PARAM_ESC_FIRMWARE_LEN)
-
-
-// Kontronik parameter register IDs (from frame type 'E').
-#define KONTRONIK_REG_BEC_VOLTAGE           8208
 
 typedef enum {
     KHS_OFF = 0,
@@ -1028,10 +1023,20 @@ static void kontronikEnsureParamPayload(void)
     }
 }
 
-static inline void kontronikWriteParamU16(uint16_t offset, uint16_t value)
+static void kontronikSetParamString(const char *payload, uint16_t payloadLen)
 {
-    paramPayload[offset] = (uint8_t)(value & 0xFF);
-    paramPayload[offset + 1] = (uint8_t)(value >> 8);
+    if (!payload || payloadLen == 0) {
+        return;
+    }
+
+    const uint16_t maxLen = PARAM_BUFFER_SIZE - PARAM_HEADER_SIZE - 1;
+    if (payloadLen > maxLen) {
+        payloadLen = maxLen;
+    }
+
+    memcpy(paramPayload, payload, payloadLen);
+    paramPayload[payloadLen] = '\0';
+    paramPayloadLength = (uint8_t)(payloadLen + 1);
 }
 
 static inline void kontronikWriteParamU8(uint16_t offset, uint8_t value)
@@ -1155,46 +1160,8 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
 
     if (frameType == 'E') {
-        char *saveptr = NULL;
-        for (char *tok = strtok_r(payload, ";", &saveptr); tok; tok = strtok_r(NULL, ";", &saveptr)) {
-            while (*tok == ' ') {
-                tok++;
-            }
-            if (*tok == '\0') {
-                continue;
-            }
-
-            char *colon = strchr(tok, ':');
-            if (!colon) {
-                continue;
-            }
-
-            *colon = '\0';
-            char *valStr = tok;
-            char *regStr = colon + 1;
-
-            char *endptr = NULL;
-            uint32_t value = (uint32_t)strtoul(valStr, &endptr, 10);
-            if (endptr == valStr) {
-                continue;
-            }
-
-            endptr = NULL;
-            uint32_t reg = (uint32_t)strtoul(regStr, &endptr, 10);
-            if (endptr == regStr) {
-                continue;
-            }
-
-            switch (reg) {
-            case KONTRONIK_REG_BEC_VOLTAGE:
-                kontronikEnsureParamPayload();
-                if (value > UINT16_MAX) {
-                    value = UINT16_MAX;
-                }
-                kontronikWriteParamU16(KONTRONIK_PARAM_BEC_VOLTAGE_OFFSET, (uint16_t)value);
-                break;
-            }
-        }
+        // Keep full raw parameter string for the suite to split by ';' and ':'.
+        kontronikSetParamString(payload, payloadLen);
         return;
     }
 
