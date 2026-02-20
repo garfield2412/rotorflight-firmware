@@ -969,14 +969,14 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 
 #define KONTRONIK_PARAM_ESC_MODEL_OFFSET    0
 #define KONTRONIK_PARAM_ESC_MODEL_LEN       16
-#define KONTRONIK_PARAM_ESC_VERSION_OFFSET  (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
-#define KONTRONIK_PARAM_ESC_VERSION_LEN     16
-#define KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET (KONTRONIK_PARAM_ESC_VERSION_OFFSET + KONTRONIK_PARAM_ESC_VERSION_LEN)
-#define KONTRONIK_PARAM_ESC_FIRMWARE_LEN    16
-#define KONTRONIK_PARAM_PAIR_COUNT_OFFSET   (KONTRONIK_PARAM_ESC_FIRMWARE_OFFSET + KONTRONIK_PARAM_ESC_FIRMWARE_LEN)
-#define KONTRONIK_PARAM_PAIR_DATA_OFFSET    (KONTRONIK_PARAM_PAIR_COUNT_OFFSET + 2)
-#define KONTRONIK_MAX_PARAM_PAIRS           41
-#define KONTRONIK_PARAM_PAIR_SIZE           5   // u8 index + u32 value(LE)
+#define KONTRONIK_PARAM_TOTAL_COUNT_OFFSET  (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)   // u16 LE
+#define KONTRONIK_PARAM_CHUNK_INDEX_OFFSET  (KONTRONIK_PARAM_TOTAL_COUNT_OFFSET + 2)                               // u8
+#define KONTRONIK_PARAM_CHUNK_COUNT_OFFSET  (KONTRONIK_PARAM_CHUNK_INDEX_OFFSET + 1)                               // u8
+#define KONTRONIK_PARAM_CHUNK_PAIRS_OFFSET  (KONTRONIK_PARAM_CHUNK_COUNT_OFFSET + 1)                               // u8
+#define KONTRONIK_PARAM_PAIR_DATA_OFFSET    (KONTRONIK_PARAM_CHUNK_PAIRS_OFFSET + 1)
+#define KONTRONIK_PARAM_HEADER_LENGTH       KONTRONIK_PARAM_PAIR_DATA_OFFSET
+#define KONTRONIK_PARAM_PAIR_SIZE           6   // u16 reg_id(LE) + u32 value(LE)
+#define KONTRONIK_MAX_STORED_PAIRS          96
 
 typedef enum {
     KHS_OFF = 0,
@@ -993,15 +993,9 @@ static uint8_t konCmdLen = 0;
 static uint8_t konFrame[KONTRONIK_RXLINE_MAX];
 static uint16_t konFrameLen = 0;
 static bool konFrameActive = false;
-
-// Stable register order from frame type 'E'; Lua maps index->field.
-static const uint16_t konParamRegIds[KONTRONIK_MAX_PARAM_PAIRS] = {
-    8192, 8194, 16388, 8200, 8202, 8204, 8206, 8208, 8210, 8212,
-    8214, 8216, 8218, 8220, 8222, 12320, 8226, 8228, 8230, 8232,
-    8234, 8236, 16432, 8244, 8246, 8248, 12346, 8252, 8254, 12352,
-    12354, 16452, 8264, 8266, 8268, 8270, 8272, 8274, 8276, 8278,
-    16472
-};
+static uint16_t konParamPairs[KONTRONIK_MAX_STORED_PAIRS * 3]; // reg + u32 value (split in 2x u16) per pair
+static uint16_t konParamPairCount = 0;
+static uint8_t konChunkIndexNext = 0;
 
 static void konHsResetCmd(void)
 {
@@ -1026,20 +1020,61 @@ static void konHsWrite(const char *s)
 
 static void kontronikEnsureParamPayload(void)
 {
-    if (paramPayloadLength < KONTRONIK_PARAM_PAIR_DATA_OFFSET) {
-        memset(paramPayload, 0, KONTRONIK_PARAM_PAIR_DATA_OFFSET);
-        paramPayloadLength = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
+    if (paramPayloadLength < KONTRONIK_PARAM_HEADER_LENGTH) {
+        memset(paramPayload, 0, KONTRONIK_PARAM_HEADER_LENGTH);
+        paramPayloadLength = KONTRONIK_PARAM_HEADER_LENGTH;
     }
 }
 
-static int8_t kontronikRegToIndex(uint16_t regId)
+static void kontronikBuildParamChunk(void)
 {
-    for (uint8_t i = 0; i < KONTRONIK_MAX_PARAM_PAIRS; i++) {
-        if (konParamRegIds[i] == regId) {
-            return i;
-        }
+    kontronikEnsureParamPayload();
+
+    const uint16_t maxPayloadLen = PARAM_BUFFER_SIZE - PARAM_HEADER_SIZE;
+    const uint16_t maxPairsPerChunk = (maxPayloadLen - KONTRONIK_PARAM_HEADER_LENGTH) / KONTRONIK_PARAM_PAIR_SIZE;
+    const uint16_t totalPairs = konParamPairCount;
+
+    paramPayload[KONTRONIK_PARAM_TOTAL_COUNT_OFFSET + 0] = (uint8_t)(totalPairs & 0xFF);
+    paramPayload[KONTRONIK_PARAM_TOTAL_COUNT_OFFSET + 1] = (uint8_t)((totalPairs >> 8) & 0xFF);
+
+    if (totalPairs == 0 || maxPairsPerChunk == 0) {
+        paramPayload[KONTRONIK_PARAM_CHUNK_INDEX_OFFSET] = 0;
+        paramPayload[KONTRONIK_PARAM_CHUNK_COUNT_OFFSET] = 0;
+        paramPayload[KONTRONIK_PARAM_CHUNK_PAIRS_OFFSET] = 0;
+        paramPayloadLength = KONTRONIK_PARAM_HEADER_LENGTH;
+        return;
     }
-    return -1;
+
+    const uint16_t chunkCount16 = (totalPairs + maxPairsPerChunk - 1) / maxPairsPerChunk;
+    const uint8_t chunkCount = (uint8_t)MIN(chunkCount16, 255);
+    const uint8_t chunkIndex = (chunkCount > 0) ? (uint8_t)(konChunkIndexNext % chunkCount) : 0;
+    const uint16_t startPair = chunkIndex * maxPairsPerChunk;
+    const uint16_t chunkPairs16 = MIN((uint16_t)maxPairsPerChunk, (uint16_t)(totalPairs - startPair));
+    const uint8_t chunkPairs = (uint8_t)chunkPairs16;
+
+    paramPayload[KONTRONIK_PARAM_CHUNK_INDEX_OFFSET] = chunkIndex;
+    paramPayload[KONTRONIK_PARAM_CHUNK_COUNT_OFFSET] = chunkCount;
+    paramPayload[KONTRONIK_PARAM_CHUNK_PAIRS_OFFSET] = chunkPairs;
+
+    uint16_t offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
+    for (uint16_t i = 0; i < chunkPairs16; i++) {
+        const uint16_t p = (startPair + i) * 3;
+        const uint16_t reg = konParamPairs[p + 0];
+        const uint32_t value = ((uint32_t)konParamPairs[p + 1]) | ((uint32_t)konParamPairs[p + 2] << 16);
+
+        paramPayload[offset + 0] = (uint8_t)(reg & 0xFF);
+        paramPayload[offset + 1] = (uint8_t)((reg >> 8) & 0xFF);
+        paramPayload[offset + 2] = (uint8_t)(value & 0xFF);
+        paramPayload[offset + 3] = (uint8_t)((value >> 8) & 0xFF);
+        paramPayload[offset + 4] = (uint8_t)((value >> 16) & 0xFF);
+        paramPayload[offset + 5] = (uint8_t)((value >> 24) & 0xFF);
+        offset += KONTRONIK_PARAM_PAIR_SIZE;
+    }
+
+    paramPayloadLength = (uint8_t)offset;
+    if (chunkCount > 0) {
+        konChunkIndexNext = (uint8_t)((chunkIndex + 1) % chunkCount);
+    }
 }
 
 static void kontronikStoreParamPairs(char *payload)
@@ -1048,8 +1083,6 @@ static void kontronikStoreParamPairs(char *payload)
         return;
     }
 
-    const uint16_t maxLen = PARAM_BUFFER_SIZE - PARAM_HEADER_SIZE;
-    uint16_t offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
     uint16_t pairCount = 0;
 
     char *saveptr = NULL;
@@ -1082,30 +1115,20 @@ static void kontronikStoreParamPairs(char *payload)
             continue;
         }
 
-        const int8_t pidx = kontronikRegToIndex((uint16_t)reg);
-        if (pidx < 0) {
-            continue;
-        }
-
-        if (pairCount >= KONTRONIK_MAX_PARAM_PAIRS || offset + KONTRONIK_PARAM_PAIR_SIZE > maxLen) {
+        if (pairCount >= KONTRONIK_MAX_STORED_PAIRS) {
             break;
         }
 
-        // Compact pair: index + value. Lua maps index->register/field.
-        paramPayload[offset + 0] = (uint8_t)pidx;
-        paramPayload[offset + 1] = (uint8_t)(value & 0xFF);
-        paramPayload[offset + 2] = (uint8_t)((value >> 8) & 0xFF);
-        paramPayload[offset + 3] = (uint8_t)((value >> 16) & 0xFF);
-        paramPayload[offset + 4] = (uint8_t)((value >> 24) & 0xFF);
-        offset += KONTRONIK_PARAM_PAIR_SIZE;
+        const uint16_t p = pairCount * 3;
+        konParamPairs[p + 0] = (uint16_t)reg;
+        konParamPairs[p + 1] = (uint16_t)(value & 0xFFFF);
+        konParamPairs[p + 2] = (uint16_t)(value >> 16);
         pairCount++;
     }
 
-    // Keep legacy fixed header fields first (model/version/fw), then pair block.
-    // [48..49] u16 pair_count(LE), [50..] repeated {u8 idx, u32 value(LE)}
-    paramPayload[KONTRONIK_PARAM_PAIR_COUNT_OFFSET + 0] = (uint8_t)(pairCount & 0xFF);
-    paramPayload[KONTRONIK_PARAM_PAIR_COUNT_OFFSET + 1] = (uint8_t)((pairCount >> 8) & 0xFF);
-    paramPayloadLength = (uint8_t)offset;
+    konParamPairCount = pairCount;
+    konChunkIndexNext = 0;
+    kontronikBuildParamChunk();
 }
 
 static void konHsStoreEscModel(const char *model)
@@ -4289,7 +4312,9 @@ bool INIT_CODE escSensorInit(void)
         konHsState = KHS_OFF;
         konFrameReset();
         konHsResetCmd();
-        paramVer = 1; // Kontronik payload format: model/version/fw + pair_count + indexed values.
+        konParamPairCount = 0;
+        konChunkIndexNext = 0;
+        paramVer = 1; // Kontronik payload format: model + total/chunk meta + raw reg/value pairs.
         // Ensure we always return a buffer for MSP reads, even before first frames arrive.
         kontronikEnsureParamPayload();
     }
@@ -4302,6 +4327,9 @@ bool INIT_CODE escSensorInit(void)
 uint8_t escGetParamBufferLength(void)
 {
     paramMspActive = true;
+    if (escSensorConfig()->protocol == ESC_SENSOR_PROTO_KONTRONIK) {
+        kontronikBuildParamChunk();
+    }
     return paramPayloadLength != 0 ? PARAM_HEADER_SIZE + paramPayloadLength : 0;
 }
 
