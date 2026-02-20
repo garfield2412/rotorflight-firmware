@@ -1419,6 +1419,13 @@ static bool mspProcessOutCommand(int16_t cmdMSP, sbuf_t *dst)
         }
         break;
 
+    case MSP_GET_ADJUSTMENT_FUNCTION_IDS:
+        for (int i = 0; i < MAX_ADJUSTMENT_RANGE_COUNT; i++) {
+            const adjustmentRange_t *adjRange = adjustmentRanges(i);
+            sbufWriteU8(dst, adjRange->function);
+        }
+        break;
+
     case MSP_MOTOR_CONFIG:
         sbufWriteU16(dst, motorConfig()->minthrottle);
         sbufWriteU16(dst, motorConfig()->maxthrottle);
@@ -1946,7 +1953,7 @@ static bool mspProcessOutCommand(int16_t cmdMSP, sbuf_t *dst)
         sbufWriteU8(dst, gyroConfig()->gyro_high_fsr);
         sbufWriteU8(dst, gyroConfig()->gyroMovementCalibrationThreshold);
         sbufWriteU16(dst, gyroConfig()->gyroCalibrationDuration);
-        sbufWriteU16(dst, gyroConfig()->gyro_offset_yaw);
+        sbufWriteU16(dst, 0); // gyroConfig()->gyro_offset_yaw
         sbufWriteU8(dst, gyroConfig()->checkOverflow);
         break;
 
@@ -2899,7 +2906,7 @@ static mspResult_e mspProcessInCommand(mspDescriptor_t srcDesc, int16_t cmdMSP, 
         gyroConfigMutable()->gyro_high_fsr = sbufReadU8(src);
         gyroConfigMutable()->gyroMovementCalibrationThreshold = sbufReadU8(src);
         gyroConfigMutable()->gyroCalibrationDuration = sbufReadU16(src);
-        gyroConfigMutable()->gyro_offset_yaw = sbufReadU16(src);
+        sbufReadU16(src); // gyroConfigMutable()->gyro_offset_yaw
         gyroConfigMutable()->checkOverflow = sbufReadU8(src);
         validateAndFixGyroConfig();
         break;

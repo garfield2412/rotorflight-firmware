@@ -84,6 +84,10 @@ Add msp call to set just the servo center point (#366)
 
 The `cyclic_ring` parameter is added (#345).
 
+### MSP_GET_ADJUSTMENT_FUNCTION_IDS
+
+Added a call to deliver the function id in use per slot (#398)
+
 
 ## CLI Changes
 
@@ -154,6 +158,8 @@ the actual values are calculated automatically (#332).
 
 `resource GYRO_CLK` added. Sets the pin for the gyro synchronisation clock, if supported.
 
+`gyro_offset_yaw` is removed (#391).
+
 
 ## Defaults
 
@@ -184,6 +190,8 @@ the actual values are calculated automatically (#332).
 `rates_type` default is changed to `ROTORFLIGHT`.
 
 `cyclic_ring` default is changed to 150%.
+
+`rc_threshold` default for collective (4th element) is changed from 50 to 100 (5% to 10% stick) for airborne/hands-on detection.
 
 
 ## Features
@@ -252,6 +260,16 @@ The Governor has been refactored to accomodate I.C./nitro and other new features
 
 A new Rates systems is added for helicopter applications. `ROTORFLIGHT` rates is
 controlled by three parameters: maximum rate, expo, and shape.
+
+### Gyro calibration (#391)
+
+The previous gyro calibration (sum/variance and sample counting) is replaced
+with a filter-based flow: raw data is passed through a Bessel noise filter,
+then split into DC (bias) and high-frequency components via PT filters.
+When the minimum sample count (from `gyro_calib_duration`) is reached and
+the smoothed high-frequency envelope is below `gyro_calib_noise_limit` on
+all axes, the DC estimate is stored as the gyro zero and calibration
+completes. The existing CLI parameters are unchanged.
 
 
 ## Bug Fixes
