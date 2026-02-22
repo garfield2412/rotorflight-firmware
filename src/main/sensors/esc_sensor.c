@@ -1184,6 +1184,7 @@ static bool kontronikParamCommit(uint8_t cmd)
         }
         kontronikWriteParamPair(value, reg, (i + 1 < pairCount) ? ';' : '\0');
     }
+    konHsWrite("\r\n");
 
     return true;
 }
