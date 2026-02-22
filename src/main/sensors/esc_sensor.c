@@ -1101,7 +1101,9 @@ static void kontronikWriteParamPair(uint32_t value, uint16_t reg, char suffix)
     pos += kontronikAppendU32(out + pos, value);
     out[pos++] = ':';
     pos += kontronikAppendU32(out + pos, reg);
-    out[pos++] = suffix;
+    if (suffix != '\0') {
+        out[pos++] = suffix;
+    }
     serialWriteBuf(escSensorPort, (const uint8_t *)out, pos);
 }
 
@@ -1172,7 +1174,7 @@ static bool kontronikParamCommit(uint8_t cmd)
         kontronikWriteParamPair(value, reg, ';');
     }
 
-    // Second confirmation sequence, command closes with '.'
+    // Second confirmation sequence, no trailing '.'
     offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
     for (uint8_t i = 0; i < pairCount; i++) {
         uint16_t reg;
@@ -1180,7 +1182,7 @@ static bool kontronikParamCommit(uint8_t cmd)
         if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
             return false;
         }
-        kontronikWriteParamPair(value, reg, (i + 1 < pairCount) ? ';' : '.');
+        kontronikWriteParamPair(value, reg, (i + 1 < pairCount) ? ';' : '\0');
     }
 
     return true;
