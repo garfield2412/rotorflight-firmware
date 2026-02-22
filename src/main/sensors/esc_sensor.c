@@ -90,7 +90,7 @@ enum {
 
 #define TELEMETRY_BUFFER_SIZE    140
 #define REQUEST_BUFFER_SIZE      64
-#define PARAM_BUFFER_SIZE        255
+#define PARAM_BUFFER_SIZE        230
 #define PARAM_HEADER_SIZE        2
 #define PARAM_HEADER_SIG         0
 #define PARAM_HEADER_VER         1
@@ -1073,6 +1073,117 @@ static void kontronikBuildParamPayload(void)
 
     paramPayload[KONTRONIK_PARAM_PAIR_COUNT_OFFSET] = packedPairs;
     paramPayloadLength = (uint8_t)offset;
+}
+
+static uint8_t kontronikAppendU32(char *dst, uint32_t value)
+{
+    char tmp[10];
+    uint8_t len = 0;
+    do {
+        tmp[len++] = (char)('0' + (value % 10));
+        value /= 10;
+    } while (value && len < sizeof(tmp));
+
+    for (uint8_t i = 0; i < len; i++) {
+        dst[i] = tmp[len - 1 - i];
+    }
+    return len;
+}
+
+static void kontronikWriteParamPair(uint32_t value, uint16_t reg, char suffix)
+{
+    if (!escSensorPort) {
+        return;
+    }
+
+    char out[24];
+    uint8_t pos = 0;
+    pos += kontronikAppendU32(out + pos, value);
+    out[pos++] = ':';
+    pos += kontronikAppendU32(out + pos, reg);
+    out[pos++] = suffix;
+    serialWriteBuf(escSensorPort, (const uint8_t *)out, pos);
+}
+
+static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payloadLen, uint16_t *offset, uint16_t *reg, uint32_t *value)
+{
+    if (!payload || !offset || !reg || !value) {
+        return false;
+    }
+
+    uint16_t o = *offset;
+    if ((uint16_t)(o + 2) > payloadLen) {
+        return false;
+    }
+
+    const uint16_t r = (uint16_t)payload[o] | ((uint16_t)payload[o + 1] << 8);
+    o += 2;
+
+    const uint8_t valueBytes = (r == KONTRONIK_REG_U32_RAW) ? 4 : 3;
+    if ((uint16_t)(o + valueBytes) > payloadLen) {
+        return false;
+    }
+
+    uint32_t v = (uint32_t)payload[o] |
+                 ((uint32_t)payload[o + 1] << 8) |
+                 ((uint32_t)payload[o + 2] << 16);
+    if (valueBytes == 4) {
+        v |= ((uint32_t)payload[o + 3] << 24);
+    }
+    o += valueBytes;
+
+    *offset = o;
+    *reg = r;
+    *value = v;
+    return true;
+}
+
+static bool kontronikParamCommit(uint8_t cmd)
+{
+    if (cmd != 0 || !escSensorPort || paramPayloadLength < KONTRONIK_PARAM_HEADER_LENGTH) {
+        return false;
+    }
+
+    const uint8_t pairCount = paramUpdPayload[KONTRONIK_PARAM_PAIR_COUNT_OFFSET];
+    if (pairCount == 0) {
+        return true;
+    }
+
+    // Validate once before sending any write command.
+    uint16_t offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
+    for (uint8_t i = 0; i < pairCount; i++) {
+        uint16_t reg;
+        uint32_t value;
+        if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
+            return false;
+        }
+    }
+
+    konHsWrite("$$");
+
+    // First confirmation sequence.
+    offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
+    for (uint8_t i = 0; i < pairCount; i++) {
+        uint16_t reg;
+        uint32_t value;
+        if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
+            return false;
+        }
+        kontronikWriteParamPair(value, reg, ';');
+    }
+
+    // Second confirmation sequence, command closes with '.'
+    offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
+    for (uint8_t i = 0; i < pairCount; i++) {
+        uint16_t reg;
+        uint32_t value;
+        if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
+            return false;
+        }
+        kontronikWriteParamPair(value, reg, (i + 1 < pairCount) ? ';' : '.');
+    }
+
+    return true;
 }
 
 static void kontronikStoreParamPairs(char *payload)
@@ -4311,6 +4422,7 @@ bool INIT_CODE escSensorInit(void)
         konHsResetCmd();
         konParamPairCount = 0;
         paramVer = 1; // Kontronik payload format: model + pairCount + raw reg/value pairs (u24, reg 16472 as u32).
+        paramCommit = kontronikParamCommit;
         // Ensure we always return a buffer for MSP reads, even before first frames arrive.
         kontronikEnsureParamPayload();
     }
