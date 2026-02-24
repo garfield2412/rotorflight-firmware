@@ -90,7 +90,7 @@ enum {
 
 #define TELEMETRY_BUFFER_SIZE    140
 #define REQUEST_BUFFER_SIZE      64
-#define PARAM_BUFFER_SIZE        230
+#define PARAM_BUFFER_SIZE        170
 #define PARAM_HEADER_SIZE        2
 #define PARAM_HEADER_SIG         0
 #define PARAM_HEADER_VER         1
@@ -991,7 +991,9 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 // User-editable register filter:
 // Any register listed here is ignored from frame 'E' and will never appear in MSP payload/updates.
 static const uint16_t kontronikFilteredRegs[] = {
-    8192, 8194, 8200, 8204, 8210, 8212, 8222, 12320, 8244, 16452, 16472,
+    8192, 8194, 8200, 8204, 8210, 8212, 8222, 12320, 8244, 16452, 16472, //unused registers - not usefull for Rotorflight and just takes up space in the payload
+    8278, 8268, 8270, 8272, 8274, 8286, //alarms - not usefull for Rotorflight and just takes up space in the payload
+    12352, 12354, 8206, 8254 //EMK Brake Params - not usefull for Rotorflight and just takes up space in the payload
 };
 
 typedef enum {
