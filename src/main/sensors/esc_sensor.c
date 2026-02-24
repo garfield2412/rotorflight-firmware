@@ -952,8 +952,17 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 //      +++\r   -> \r\n
 //      AT\r    -> \r\nOK\r\n
 //      ATSN?\r -> \r\nOK\r\n\r\nKONTRONIKBT\r\n
+//      (after handshake, ESC starts sending telemetry and parameter frames)
 //  - Telemetry frame format:
 //      0: 0xA7 (SOF), 1: frame type ASCII, payload ASCII, 0x0A (LF, EOF)
+//  - Frame types:
+//      'G': Throttle Signal, A7 47 31 31 30 31 0A 
+//      'E': ESC parameters, A7 45 31 32 30 30 3A 38 31 39 32 3B 31 30... 0A
+//      'V': ESC Errors, A7 56 30 2E 30 3A 35 3D 35 33 3B 30 2E 34 3A 34 3D 34 33 3B 30 2E 34 3A 34 3D 34 33 3B 30 2E 34 3A 34 3D 34 33 3B 0A
+//      'L': Min's and Max's,  A7 4C 32 33 3D 32 2E 30 20 56 3B 32 34 3D 30 20 41 3B 32 35 3D 30 20 41 3B 32 36 3D 30 2E 35 20 56 3B 32 37 3D 30 2E 31 20 41 3B 32 38 3D 32 32 20 27 32 32 3B 32 39 3D 32 30 20 27 32 32 3B 0A
+//      'M': Motor Data, A7 4D 35 3D 30 20 27 36 3B 37 3D 30 20 41 3B 38 3D 30 20 B0 3B 0A
+//      'A': Battery values, A7 41 32 3D 32 32 2E 33 20 56 3B 33 3D 30 20 41 3B 34 3D 30 20 6D 41 68 3B 0A
+//      'R': RC and other Data, A7 52 31 3D 30 2E 35 20 73 3B 31 30 3D... 0A
 // -----------------------------------------------------------------------------
 
 #ifndef KONTRONIK_RXLINE_MAX
@@ -977,6 +986,9 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_U24_MAX                   0x00FFFFFF
 #define KONTRONIK_REG_U32_RAW               16472
 #define KONTRONIK_MAX_STORED_PAIRS          96
+#define KONTRONIK_TXLINE_MAX                40
+#define KONTRONIK_TXQUEUE_MAX               64
+#define KONTRONIK_WRITE_GAP_US              20000
 
 typedef enum {
     KHS_OFF = 0,
@@ -995,6 +1007,12 @@ static uint16_t konFrameLen = 0;
 static bool konFrameActive = false;
 static uint16_t konParamPairs[KONTRONIK_MAX_STORED_PAIRS * 3]; // reg + u32 value (split in 2x u16) per pair
 static uint16_t konParamPairCount = 0;
+static char konTxQueue[KONTRONIK_TXQUEUE_MAX][KONTRONIK_TXLINE_MAX];
+static uint8_t konTxQueueLen[KONTRONIK_TXQUEUE_MAX];
+static uint8_t konTxHead = 0;
+static uint8_t konTxTail = 0;
+static uint8_t konTxCount = 0;
+static timeUs_t konTxNextUs = 0;
 
 static void konHsResetCmd(void)
 {
@@ -1006,6 +1024,14 @@ static void konFrameReset(void)
 {
     konFrameLen = 0;
     konFrameActive = false;
+}
+
+static void konTxQueueReset(void)
+{
+    konTxHead = 0;
+    konTxTail = 0;
+    konTxCount = 0;
+    konTxNextUs = 0;
 }
 
 static void konHsWrite(const char *s)
@@ -1090,29 +1116,59 @@ static uint8_t kontronikAppendU32(char *dst, uint32_t value)
     return len;
 }
 
-static void kontronikWriteParamPair(uint32_t value, uint16_t reg, char suffix)
+static uint8_t kontronikAppendParamPair(char *out, uint8_t pos, uint32_t value, uint16_t reg, char suffix)
 {
-    if (!escSensorPort) {
-        return;
-    }
-
-    char out[24];
-    uint8_t pos = 0;
     pos += kontronikAppendU32(out + pos, value);
     out[pos++] = ':';
     pos += kontronikAppendU32(out + pos, reg);
     if (suffix != '\0') {
         out[pos++] = suffix;
     }
-    serialWriteBuf(escSensorPort, (const uint8_t *)out, pos);
+    return pos;
 }
 
-static void kontronikWriteParamLine(uint32_t value, uint16_t reg)
+static bool kontronikQueueParamLine(uint32_t value, uint16_t reg)
 {
-    konHsWrite("$$");
-    kontronikWriteParamPair(value, reg, ';');
-    kontronikWriteParamPair(value, reg, '\0');
-    konHsWrite("\r");
+    if (konTxCount >= KONTRONIK_TXQUEUE_MAX) {
+        return false;
+    }
+
+    char out[KONTRONIK_TXLINE_MAX];
+    uint8_t pos = 0;
+
+    out[pos++] = '$';
+    out[pos++] = '$';
+    pos = kontronikAppendParamPair(out, pos, value, reg, ';');
+    pos = kontronikAppendParamPair(out, pos, value, reg, '\0');
+    out[pos++] = '\r';
+    out[pos++] = '\n';
+
+    if (pos > KONTRONIK_TXLINE_MAX) {
+        return false;
+    }
+
+    memcpy(konTxQueue[konTxTail], out, pos);
+    konTxQueueLen[konTxTail] = pos;
+    konTxTail = (konTxTail + 1) % KONTRONIK_TXQUEUE_MAX;
+    konTxCount++;
+
+    return true;
+}
+
+static void kontronikFlushWriteQueue(timeUs_t currentTimeUs)
+{
+    if (!escSensorPort || !konHsDone || konTxCount == 0) {
+        return;
+    }
+
+    if (konTxNextUs != 0 && cmpTimeUs(currentTimeUs, konTxNextUs) < 0) {
+        return;
+    }
+
+    serialWriteBuf(escSensorPort, (const uint8_t *)konTxQueue[konTxHead], konTxQueueLen[konTxHead]);
+    konTxHead = (konTxHead + 1) % KONTRONIK_TXQUEUE_MAX;
+    konTxCount--;
+    konTxNextUs = currentTimeUs + KONTRONIK_WRITE_GAP_US;
 }
 
 static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payloadLen, uint16_t *offset, uint16_t *reg, uint32_t *value)
@@ -1169,8 +1225,12 @@ static bool kontronikParamCommit(uint8_t cmd)
         }
     }
 
+    konTxQueueReset();
+
     // Start sequence.
-    kontronikWriteParamLine(23, 24576);
+    if (!kontronikQueueParamLine(23, 24576)) {
+        return false;
+    }
 
     // Send each changed pair as duplicated command line.
     offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
@@ -1180,11 +1240,17 @@ static bool kontronikParamCommit(uint8_t cmd)
         if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
             return false;
         }
-        kontronikWriteParamLine(value, reg);
+        if (!kontronikQueueParamLine(value, reg)) {
+            konTxQueueReset();
+            return false;
+        }
     }
 
     // End sequence.
-    kontronikWriteParamLine(38, 24576);
+    if (!kontronikQueueParamLine(38, 24576)) {
+        konTxQueueReset();
+        return false;
+    }
 
     return true;
 }
@@ -1475,6 +1541,7 @@ static void kontronikHandshakeOnlyInit(timeUs_t nowUs)
     konHsDone = false;
     konHsResetCmd();
     konFrameReset();
+    konTxQueueReset();
 }
 
 static void kontronikSensorProcess(timeUs_t currentTimeUs)
@@ -1486,6 +1553,8 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
     if (konHsState == KHS_OFF) {
         kontronikHandshakeOnlyInit(currentTimeUs);
     }
+
+    kontronikFlushWriteQueue(currentTimeUs);
 
     while (serialRxBytesWaiting(escSensorPort)) {
         const uint8_t dataByte = serialRead(escSensorPort);
@@ -1527,6 +1596,8 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
             konFrameReset();
         }
     }
+
+    kontronikFlushWriteQueue(currentTimeUs);
 
     checkFrameTimeout(currentTimeUs, 500000);
 }
@@ -4424,6 +4495,7 @@ bool INIT_CODE escSensorInit(void)
         konFrameReset();
         konHsResetCmd();
         konParamPairCount = 0;
+        konTxQueueReset();
         paramVer = 1; // Kontronik payload format: model + pairCount + raw reg/value pairs (u24, reg 16472 as u32).
         paramCommit = kontronikParamCommit;
         // Ensure we always return a buffer for MSP reads, even before first frames arrive.
