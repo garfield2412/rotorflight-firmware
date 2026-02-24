@@ -1107,6 +1107,14 @@ static void kontronikWriteParamPair(uint32_t value, uint16_t reg, char suffix)
     serialWriteBuf(escSensorPort, (const uint8_t *)out, pos);
 }
 
+static void kontronikWriteParamLine(uint32_t value, uint16_t reg)
+{
+    konHsWrite("$$");
+    kontronikWriteParamPair(value, reg, ';');
+    kontronikWriteParamPair(value, reg, '\0');
+    konHsWrite("\r");
+}
+
 static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payloadLen, uint16_t *offset, uint16_t *reg, uint32_t *value)
 {
     if (!payload || !offset || !reg || !value) {
@@ -1161,9 +1169,10 @@ static bool kontronikParamCommit(uint8_t cmd)
         }
     }
 
-    konHsWrite("$$");
+    // Start sequence.
+    kontronikWriteParamLine(23, 24576);
 
-    // First confirmation sequence.
+    // Send each changed pair as duplicated command line.
     offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
     for (uint8_t i = 0; i < pairCount; i++) {
         uint16_t reg;
@@ -1171,20 +1180,11 @@ static bool kontronikParamCommit(uint8_t cmd)
         if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
             return false;
         }
-        kontronikWriteParamPair(value, reg, ';');
+        kontronikWriteParamLine(value, reg);
     }
 
-    // Second confirmation sequence, no trailing '.'
-    offset = KONTRONIK_PARAM_PAIR_DATA_OFFSET;
-    for (uint8_t i = 0; i < pairCount; i++) {
-        uint16_t reg;
-        uint32_t value;
-        if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
-            return false;
-        }
-        kontronikWriteParamPair(value, reg, (i + 1 < pairCount) ? ';' : '\0');
-    }
-    konHsWrite("\r\n");
+    // End sequence.
+    kontronikWriteParamLine(38, 24576);
 
     return true;
 }
