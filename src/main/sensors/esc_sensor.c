@@ -90,7 +90,7 @@ enum {
 
 #define TELEMETRY_BUFFER_SIZE    140
 #define REQUEST_BUFFER_SIZE      64
-#define PARAM_BUFFER_SIZE        170
+#define PARAM_BUFFER_SIZE        120
 #define PARAM_HEADER_SIZE        2
 #define PARAM_HEADER_SIG         0
 #define PARAM_HEADER_VER         1
@@ -983,7 +983,7 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_HEADER_LENGTH       KONTRONIK_PARAM_PAIR_DATA_OFFSET
 #define KONTRONIK_PARAM_PAIR_SIZE_U24       5   // u16 reg_id(LE) + u24 value(LE)
 #define KONTRONIK_U24_MAX                   0x00FFFFFF
-#define KONTRONIK_MAX_STORED_PAIRS          96
+#define KONTRONIK_MAX_CACHED_PAIRS          ((PARAM_BUFFER_SIZE - PARAM_HEADER_SIZE - KONTRONIK_PARAM_HEADER_LENGTH) / KONTRONIK_PARAM_PAIR_SIZE_U24)
 #define KONTRONIK_TXLINE_MAX                40
 #define KONTRONIK_TXQUEUE_MAX               64
 #define KONTRONIK_WRITE_GAP_US              30000
@@ -1011,7 +1011,7 @@ static uint8_t konCmdLen = 0;
 static uint8_t konFrame[KONTRONIK_RXLINE_MAX];
 static uint16_t konFrameLen = 0;
 static bool konFrameActive = false;
-static uint16_t konParamPairs[KONTRONIK_MAX_STORED_PAIRS * 3]; // reg + raw value (stored split in 2x u16)
+static uint16_t konParamPairs[KONTRONIK_MAX_CACHED_PAIRS * 3]; // reg + raw value (stored split in 2x u16)
 static uint16_t konParamPairCount = 0;
 static char konTxQueue[KONTRONIK_TXQUEUE_MAX][KONTRONIK_TXLINE_MAX];
 static uint8_t konTxQueueLen[KONTRONIK_TXQUEUE_MAX];
@@ -1322,7 +1322,7 @@ static void kontronikStoreParamPairs(char *payload)
             continue;
         }
 
-        if (pairCount >= KONTRONIK_MAX_STORED_PAIRS) {
+        if (pairCount >= KONTRONIK_MAX_CACHED_PAIRS) {
             break;
         }
 
