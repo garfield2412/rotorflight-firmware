@@ -982,13 +982,17 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_PAIR_DATA_OFFSET    (KONTRONIK_PARAM_PAIR_COUNT_OFFSET + 1)
 #define KONTRONIK_PARAM_HEADER_LENGTH       KONTRONIK_PARAM_PAIR_DATA_OFFSET
 #define KONTRONIK_PARAM_PAIR_SIZE_U24       5   // u16 reg_id(LE) + u24 value(LE)
-#define KONTRONIK_PARAM_PAIR_SIZE_U32       6   // u16 reg_id(LE) + u32 value(LE)
 #define KONTRONIK_U24_MAX                   0x00FFFFFF
-#define KONTRONIK_REG_U32_RAW               16472
 #define KONTRONIK_MAX_STORED_PAIRS          96
 #define KONTRONIK_TXLINE_MAX                40
 #define KONTRONIK_TXQUEUE_MAX               64
-#define KONTRONIK_WRITE_GAP_US              20000
+#define KONTRONIK_WRITE_GAP_US              30000
+
+// User-editable register filter:
+// Any register listed here is ignored from frame 'E' and will never appear in MSP payload/updates.
+static const uint16_t kontronikFilteredRegs[] = {
+    8192, 8194, 8200, 8204, 8210, 8212, 8222, 12320, 8244, 16452, 16472,
+};
 
 typedef enum {
     KHS_OFF = 0,
@@ -1005,7 +1009,7 @@ static uint8_t konCmdLen = 0;
 static uint8_t konFrame[KONTRONIK_RXLINE_MAX];
 static uint16_t konFrameLen = 0;
 static bool konFrameActive = false;
-static uint16_t konParamPairs[KONTRONIK_MAX_STORED_PAIRS * 3]; // reg + u32 value (split in 2x u16) per pair
+static uint16_t konParamPairs[KONTRONIK_MAX_STORED_PAIRS * 3]; // reg + raw value (stored split in 2x u16)
 static uint16_t konParamPairCount = 0;
 static char konTxQueue[KONTRONIK_TXQUEUE_MAX][KONTRONIK_TXLINE_MAX];
 static uint8_t konTxQueueLen[KONTRONIK_TXQUEUE_MAX];
@@ -1014,18 +1018,33 @@ static uint8_t konTxTail = 0;
 static uint8_t konTxCount = 0;
 static timeUs_t konTxNextUs = 0;
 
+// Return true when a register should be omitted from cached params/MSP payload.
+static bool kontronikIsFilteredReg(const uint16_t reg)
+{
+    for (uint8_t i = 0; i < ARRAYLEN(kontronikFilteredRegs); i++) {
+        if (kontronikFilteredRegs[i] == reg) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Clear the current AT-style command accumulator used during ESC boot handshake.
 static void konHsResetCmd(void)
 {
     konCmdLen = 0;
     konCmd[0] = '\0';
 }
 
+// Reset framed UART receive state for A7...LF telemetry frames.
 static void konFrameReset(void)
 {
     konFrameLen = 0;
     konFrameActive = false;
 }
 
+// Drop all pending outbound write lines and timing state.
 static void konTxQueueReset(void)
 {
     konTxHead = 0;
@@ -1034,6 +1053,7 @@ static void konTxQueueReset(void)
     konTxNextUs = 0;
 }
 
+// Write an ASCII string to the Kontronik UART port as-is.
 static void konHsWrite(const char *s)
 {
     if (!escSensorPort || !s) {
@@ -1043,6 +1063,7 @@ static void konHsWrite(const char *s)
     serialWriteBuf(escSensorPort, (const uint8_t *)s, len);
 }
 
+// Ensure the MSP parameter payload contains at least the fixed Kontronik header area.
 static void kontronikEnsureParamPayload(void)
 {
     if (paramPayloadLength < KONTRONIK_PARAM_HEADER_LENGTH) {
@@ -1051,6 +1072,7 @@ static void kontronikEnsureParamPayload(void)
     }
 }
 
+// Serialize cached reg/value pairs into the compact binary MSP payload format.
 static void kontronikBuildParamPayload(void)
 {
     kontronikEnsureParamPayload();
@@ -1071,8 +1093,11 @@ static void kontronikBuildParamPayload(void)
         const uint16_t p = i * 3;
         const uint16_t reg = konParamPairs[p + 0];
         const uint32_t value = ((uint32_t)konParamPairs[p + 1]) | ((uint32_t)konParamPairs[p + 2] << 16);
-        const bool rawU32 = (reg == KONTRONIK_REG_U32_RAW);
-        const uint8_t pairSize = rawU32 ? KONTRONIK_PARAM_PAIR_SIZE_U32 : KONTRONIK_PARAM_PAIR_SIZE_U24;
+        const uint8_t pairSize = KONTRONIK_PARAM_PAIR_SIZE_U24;
+
+        if (kontronikIsFilteredReg(reg)) {
+            continue;
+        }
 
         if ((uint16_t)(offset + pairSize) > maxPayloadLen) {
             break;
@@ -1080,18 +1105,10 @@ static void kontronikBuildParamPayload(void)
 
         paramPayload[offset + 0] = (uint8_t)(reg & 0xFF);
         paramPayload[offset + 1] = (uint8_t)((reg >> 8) & 0xFF);
-
-        if (rawU32) {
-            paramPayload[offset + 2] = (uint8_t)(value & 0xFF);
-            paramPayload[offset + 3] = (uint8_t)((value >> 8) & 0xFF);
-            paramPayload[offset + 4] = (uint8_t)((value >> 16) & 0xFF);
-            paramPayload[offset + 5] = (uint8_t)((value >> 24) & 0xFF);
-        } else {
-            const uint32_t u24 = MIN(value, (uint32_t)KONTRONIK_U24_MAX);
-            paramPayload[offset + 2] = (uint8_t)(u24 & 0xFF);
-            paramPayload[offset + 3] = (uint8_t)((u24 >> 8) & 0xFF);
-            paramPayload[offset + 4] = (uint8_t)((u24 >> 16) & 0xFF);
-        }
+        const uint32_t u24 = MIN(value, (uint32_t)KONTRONIK_U24_MAX);
+        paramPayload[offset + 2] = (uint8_t)(u24 & 0xFF);
+        paramPayload[offset + 3] = (uint8_t)((u24 >> 8) & 0xFF);
+        paramPayload[offset + 4] = (uint8_t)((u24 >> 16) & 0xFF);
 
         offset += pairSize;
         packedPairs++;
@@ -1101,6 +1118,7 @@ static void kontronikBuildParamPayload(void)
     paramPayloadLength = (uint8_t)offset;
 }
 
+// Append an unsigned decimal integer as ASCII.
 static uint8_t kontronikAppendU32(char *dst, uint32_t value)
 {
     char tmp[10];
@@ -1116,6 +1134,7 @@ static uint8_t kontronikAppendU32(char *dst, uint32_t value)
     return len;
 }
 
+// Append one "value:reg" ASCII pair, optionally with a suffix delimiter.
 static uint8_t kontronikAppendParamPair(char *out, uint8_t pos, uint32_t value, uint16_t reg, char suffix)
 {
     pos += kontronikAppendU32(out + pos, value);
@@ -1127,6 +1146,7 @@ static uint8_t kontronikAppendParamPair(char *out, uint8_t pos, uint32_t value, 
     return pos;
 }
 
+// Queue one Kontronik write line ("$$v:r;v:r\\r\\n") for paced transmission.
 static bool kontronikQueueParamLine(uint32_t value, uint16_t reg)
 {
     if (konTxCount >= KONTRONIK_TXQUEUE_MAX) {
@@ -1155,6 +1175,7 @@ static bool kontronikQueueParamLine(uint32_t value, uint16_t reg)
     return true;
 }
 
+// Send at most one queued write line when handshake is complete and gap timer allows it.
 static void kontronikFlushWriteQueue(timeUs_t currentTimeUs)
 {
     if (!escSensorPort || !konHsDone || konTxCount == 0) {
@@ -1171,6 +1192,7 @@ static void kontronikFlushWriteQueue(timeUs_t currentTimeUs)
     konTxNextUs = currentTimeUs + KONTRONIK_WRITE_GAP_US;
 }
 
+// Read one binary reg/value pair from MSP update payload (always u24 value).
 static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payloadLen, uint16_t *offset, uint16_t *reg, uint32_t *value)
 {
     if (!payload || !offset || !reg || !value) {
@@ -1185,7 +1207,7 @@ static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payload
     const uint16_t r = (uint16_t)payload[o] | ((uint16_t)payload[o + 1] << 8);
     o += 2;
 
-    const uint8_t valueBytes = (r == KONTRONIK_REG_U32_RAW) ? 4 : 3;
+    const uint8_t valueBytes = 3;
     if ((uint16_t)(o + valueBytes) > payloadLen) {
         return false;
     }
@@ -1193,9 +1215,6 @@ static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payload
     uint32_t v = (uint32_t)payload[o] |
                  ((uint32_t)payload[o + 1] << 8) |
                  ((uint32_t)payload[o + 2] << 16);
-    if (valueBytes == 4) {
-        v |= ((uint32_t)payload[o + 3] << 24);
-    }
     o += valueBytes;
 
     *offset = o;
@@ -1204,6 +1223,7 @@ static bool kontronikReadParamPair(const uint8_t *payload, const uint8_t payload
     return true;
 }
 
+// Validate an MSP write request and enqueue full Kontronik start/data/end write sequence.
 static bool kontronikParamCommit(uint8_t cmd)
 {
     if (cmd != 0 || !escSensorPort || paramPayloadLength < KONTRONIK_PARAM_HEADER_LENGTH) {
@@ -1240,6 +1260,9 @@ static bool kontronikParamCommit(uint8_t cmd)
         if (!kontronikReadParamPair(paramUpdPayload, paramPayloadLength, &offset, &reg, &value)) {
             return false;
         }
+        if (kontronikIsFilteredReg(reg)) {
+            continue;
+        }
         if (!kontronikQueueParamLine(value, reg)) {
             konTxQueueReset();
             return false;
@@ -1255,6 +1278,7 @@ static bool kontronikParamCommit(uint8_t cmd)
     return true;
 }
 
+// Parse frame-'E' ASCII payload ("value:reg;...") and cache pairs for MSP/LUA side mapping.
 static void kontronikStoreParamPairs(char *payload)
 {
     if (!payload || *payload == '\0') {
@@ -1292,6 +1316,9 @@ static void kontronikStoreParamPairs(char *payload)
         if (endptr == regStr || *endptr != '\0' || reg > UINT16_MAX) {
             continue;
         }
+        if (kontronikIsFilteredReg((uint16_t)reg)) {
+            continue;
+        }
 
         if (pairCount >= KONTRONIK_MAX_STORED_PAIRS) {
             break;
@@ -1308,6 +1335,7 @@ static void kontronikStoreParamPairs(char *payload)
     kontronikBuildParamPayload();
 }
 
+// Copy the ESC model text from "--R=" token into fixed payload header field.
 static void konHsStoreEscModel(const char *model)
 {
     if (!model || !*model) {
@@ -1335,6 +1363,7 @@ static void konHsStoreEscModel(const char *model)
     memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, model, modelLen);
 }
 
+// Handle the minimal Kontronik boot handshake command subset (+++, AT, ATSN?).
 static void konHsHandleCommand(void)
 {
     if (konCmdLen == 0) {
@@ -1360,6 +1389,7 @@ static void konHsHandleCommand(void)
     }
 }
 
+// Consume one byte of handshake text stream and dispatch complete CR-terminated commands.
 static void kontronikConsumeHandshakeByte(const uint8_t dataByte)
 {
     if (dataByte == '\n') {
@@ -1382,6 +1412,7 @@ static void kontronikConsumeHandshakeByte(const uint8_t dataByte)
     }
 }
 
+// Parse one complete A7/<type>/ASCII/LF frame and map supported values into escSensorData.
 static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameLen, timeUs_t currentTimeUs)
 {
     if (!frame || frameLen < 3 || frame[0] != KONTRONIK_SOF) {
@@ -1533,6 +1564,7 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
 }
 
+// Initialize handshake-only state before first valid telemetry framing starts.
 static void kontronikHandshakeOnlyInit(timeUs_t nowUs)
 {
     UNUSED(nowUs);
@@ -1544,6 +1576,7 @@ static void kontronikHandshakeOnlyInit(timeUs_t nowUs)
     konTxQueueReset();
 }
 
+// Main Kontronik runtime: pace queued writes, run handshake, assemble frames, decode payload.
 static void kontronikSensorProcess(timeUs_t currentTimeUs)
 {
     if (!escSensorPort) {
@@ -4496,7 +4529,7 @@ bool INIT_CODE escSensorInit(void)
         konHsResetCmd();
         konParamPairCount = 0;
         konTxQueueReset();
-        paramVer = 1; // Kontronik payload format: model + pairCount + raw reg/value pairs (u24, reg 16472 as u32).
+        paramVer = 1; // Kontronik payload format: model + pairCount + raw reg/value pairs (u24).
         paramCommit = kontronikParamCommit;
         // Ensure we always return a buffer for MSP reads, even before first frames arrive.
         kontronikEnsureParamPayload();
