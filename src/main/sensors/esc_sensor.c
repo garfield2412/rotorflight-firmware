@@ -38,6 +38,7 @@
 #include "pg/motor.h"
 
 #include "common/maths.h"
+#include "common/typeconversion.h"
 #include "common/utils.h"
 #include "common/filter.h"
 
@@ -1202,26 +1203,6 @@ static void kontronikFlushWriteQueue(timeUs_t currentTimeUs)
     konTxNextUs = currentTimeUs + KONTRONIK_WRITE_GAP_US;
 }
 
-// Read one u24 value from fixed-order payload.
-static bool kontronikReadU24Value(const uint8_t *payload, const uint8_t payloadLen, uint16_t *offset, uint32_t *value)
-{
-    if (!payload || !offset || !value) {
-        return false;
-    }
-
-    const uint16_t o = *offset;
-    if ((uint16_t)(o + KONTRONIK_PARAM_VALUE_SIZE_U24) > payloadLen) {
-        return false;
-    }
-
-    uint32_t v = (uint32_t)payload[o] |
-                 ((uint32_t)payload[o + 1] << 8) |
-                 ((uint32_t)payload[o + 2] << 16);
-    *offset = o + KONTRONIK_PARAM_VALUE_SIZE_U24;
-    *value = v;
-    return true;
-}
-
 // Cache ESC model text from frame token "--R=<model>" to fixed 16-byte payload field.
 static void kontronikStoreEscModel(const char *model)
 {
@@ -1252,32 +1233,10 @@ static bool kontronikParamCommit(uint8_t cmd)
         return false;
     }
 
-    // Validate once before sending any write command.
-    uint16_t offset = KONTRONIK_PARAM_VALUES_OFFSET;
-    for (uint8_t i = 0; i < KONTRONIK_PARAM_SLOT_COUNT; i++) {
-        uint32_t value;
-        if (!kontronikReadU24Value(paramUpdPayload, paramPayloadLength, &offset, &value)) {
-            return false;
-        }
-    }
-
-    uint8_t changedCount = 0;
-    for (uint8_t i = 0; i < KONTRONIK_PARAM_SLOT_COUNT; i++) {
-        const uint16_t offsetOld = KONTRONIK_PARAM_VALUES_OFFSET + i * KONTRONIK_PARAM_VALUE_SIZE_U24;
-        const uint16_t offsetNew = offsetOld;
-        const uint32_t oldValue = (uint32_t)paramPayload[offsetOld] |
-            ((uint32_t)paramPayload[offsetOld + 1] << 8) |
-            ((uint32_t)paramPayload[offsetOld + 2] << 16);
-        const uint32_t newValue = (uint32_t)paramUpdPayload[offsetNew] |
-            ((uint32_t)paramUpdPayload[offsetNew + 1] << 8) |
-            ((uint32_t)paramUpdPayload[offsetNew + 2] << 16);
-        if (oldValue != newValue) {
-            changedCount++;
-        }
-    }
-
     // Nothing changed in the fixed slot payload.
-    if (changedCount == 0) {
+    if (memcmp(paramPayload + KONTRONIK_PARAM_VALUES_OFFSET,
+               paramUpdPayload + KONTRONIK_PARAM_VALUES_OFFSET,
+               KONTRONIK_PARAM_SLOT_COUNT * KONTRONIK_PARAM_VALUE_SIZE_U24) == 0) {
         return true;
     }
 
@@ -1289,16 +1248,15 @@ static bool kontronikParamCommit(uint8_t cmd)
     }
 
     // Send only changed fixed-order parameters as duplicated command lines.
-    offset = KONTRONIK_PARAM_VALUES_OFFSET;
     for (uint8_t i = 0; i < KONTRONIK_PARAM_SLOT_COUNT; i++) {
-        uint32_t value;
-        if (!kontronikReadU24Value(paramUpdPayload, paramPayloadLength, &offset, &value)) {
-            return false;
-        }
         const uint16_t offsetOld = KONTRONIK_PARAM_VALUES_OFFSET + i * KONTRONIK_PARAM_VALUE_SIZE_U24;
+        const uint16_t offsetNew = offsetOld;
         const uint32_t oldValue = (uint32_t)paramPayload[offsetOld] |
             ((uint32_t)paramPayload[offsetOld + 1] << 8) |
             ((uint32_t)paramPayload[offsetOld + 2] << 16);
+        const uint32_t value = (uint32_t)paramUpdPayload[offsetNew] |
+            ((uint32_t)paramUpdPayload[offsetNew + 1] << 8) |
+            ((uint32_t)paramUpdPayload[offsetNew + 2] << 16);
         if (oldValue == value) {
             continue;
         }
@@ -1475,7 +1433,8 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
             continue;
         }
 
-        if (strncmp(tok, "--R=", 4) == 0) {
+        // ESC model token appears in frame 'R' only ("--R=<model>").
+        if (frameType == 'R' && strncmp(tok, "--R=", 4) == 0) {
             kontronikStoreEscModel(tok + 4);
             continue;
         }
@@ -1492,11 +1451,10 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
             val++;
         }
 
-        char *endptr = NULL;
-        const float fval = strtof(val, &endptr);
-        if (endptr == val) {
+        if (!((*val >= '0' && *val <= '9') || *val == '-' || *val == '+' || *val == '.')) {
             continue;
         }
+        const float fval = fastA2F(val);
 
         if (frameType == 'R') {
             // Frame 8 mapping to legacy Kontronik telemetry fields.
