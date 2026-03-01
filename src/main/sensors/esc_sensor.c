@@ -980,46 +980,56 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_PARAM_ESC_MODEL_OFFSET    0
 #define KONTRONIK_PARAM_ESC_MODEL_LEN       16
 #define KONTRONIK_PARAM_SLOT_COUNT          30
-#define KONTRONIK_PARAM_VALUE_SIZE_U24      3   // u24 value(LE), register ids are implicit by slot order
-#define KONTRONIK_PARAM_VALUES_OFFSET       (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
-#define KONTRONIK_PARAM_PAYLOAD_LENGTH      (KONTRONIK_PARAM_VALUES_OFFSET + KONTRONIK_PARAM_SLOT_COUNT * KONTRONIK_PARAM_VALUE_SIZE_U24)
+#define KONTRONIK_PARAM_COUNT_OFFSET        (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
+#define KONTRONIK_PARAM_VALUES_OFFSET       (KONTRONIK_PARAM_COUNT_OFFSET + 1)
+#define KONTRONIK_PARAM_SPECIAL_U24_SLOT    27  // slot 28 (reg 16388) keeps full u24 range
+#define KONTRONIK_PARAM_VALUE_SIZE_U16      2
+#define KONTRONIK_PARAM_VALUE_SIZE_U24      3
+#define KONTRONIK_PARAM_VALUE_BLOCK_LENGTH  (((KONTRONIK_PARAM_SLOT_COUNT - 1) * KONTRONIK_PARAM_VALUE_SIZE_U16) + KONTRONIK_PARAM_VALUE_SIZE_U24)
+#define KONTRONIK_PARAM_PAYLOAD_LENGTH      (KONTRONIK_PARAM_VALUES_OFFSET + KONTRONIK_PARAM_VALUE_BLOCK_LENGTH)
 #define KONTRONIK_U24_MAX                   0x00FFFFFF
 #define KONTRONIK_MAX_CACHED_PAIRS          48  // frame 'E' currently carries up to 41 value/register pairs
 #define KONTRONIK_TXLINE_MAX                40
 #define KONTRONIK_TXQUEUE_MAX               64
 #define KONTRONIK_WRITE_GAP_US              30000
 
-// Fixed Lua/MSPv1 parameter order (30 slots), with table examples (value:id):
-//  1)  8202  "...at a Cell Voltage of"                ex: 3000:8202
-//  2)  8206  "EMK Brake behavior positive"            ex: 1750:8206
-//  3)  8208  "BEC Voltage"                            ex: 6000:8208
-//  4)  8214  "Brake position"                         ex: 1100:8214
-//  5)  8216  "Off position"                           ex: 1200:8216
-//  6)  8218  "Max Position"                           ex: 1600:8218
-//  7)  8220  "RPM Control off"                        ex: 327:8220
-//  8)  8226  "Slew rate up"                           ex: 1100:8226
+// Fixed Lua/MSPv1 parameter order (30 slots), with examples from frame:
+// Payload encoding (MSPv1 cmd 217/218):
+//   [0..15]   model ASCII (zero-padded)
+//   [16]      slot count (always 30)
+//   [17..77]  30 slot-values in fixed order
+//   - slots 1..27 and 29..30 are U16 LE
+//   - slot 28 (reg 16388) is U24 LE (special case)
+//  1)  8202  "...at a Cell Voltage of"                ex: 1200:8202
+//  2)  8206  "EMK Brake behavior positive"            ex: 500:8206
+//  3)  8208  "BEC Voltage"                            ex: 5500:8208
+//  4)  8214  "Brake position"                         ex: 1101:8214
+//  5)  8216  "Off position"                           ex: 1101:8216
+//  6)  8218  "Max Position"                           ex: 1501:8218
+//  7)  8220  "RPM Control off"                        ex: 1365:8220
+//  8)  8226  "Slew rate up"                           ex: 1000:8226
 //  9)  8228  "Slew rate down"                         ex: 200:8228
 // 10)  8230  "Startup Time"                           ex: 10000:8230
 // 11)  8232  "P-Gain"                                 ex: 6:8232
 // 12)  8234  "Motor resistance Compensation"          ex: 4:8234
-// 13)  8236  "Discharge Limit"                        ex: 30:8236
-// 14)  8246  "Telemetry"                              ex: 6:8246
-// 15)  8252  "Startup Current Limit"                  ex: 10:8252
+// 13)  8236  "Discharge Limit"                        ex: 0:8236
+// 14)  8246  "Telemetry"                              ex: 256:8246
+// 15)  8252  "Startup Current Limit"                  ex: 15:8252
 // 16)  8254  "EMK Brake behavior negative"            ex: 105:8254
-// 17)  8264  "Pole Number"                            ex: 4:8264
-// 18)  8266  "Gear Ratio"                             ex: 150:8266
+// 17)  8264  "Pole Number"                            ex: 2:8264
+// 18)  8266  "Gear Ratio"                             ex: 950:8266
 // 19)  8268  "Alarm min input voltage"                ex: 3500:8268
 // 20)  8270  "Alarm max motor current"                ex: 220:8270
 // 21)  8272  "Alarm max ESC temp"                     ex: 95:8272
-// 22)  8274  "Alarm max BEC temp"                     ex: 65:8274
-// 23)  8276  "Alarm max BEC current"                  ex: 13500:8276
-// 24)  8278  "Alarm max discharge"                    ex: 10:8278
-// 25) 12346  "PWM min."                               ex: 4:12346
-// 26) 12352  "Min. Brake-PWM"                         ex: 5:12352
-// 27) 12354  "Max. Brake-PWM"                         ex: 99:12354
-// 28) 16388  "bitfields"                              ex: 68400:16388
-// 29) 16432  "Maximum RPM"                            ex: 31000:16432
-// 30) 20480  "Model Type"                             ex: 3:20480
+// 22)  8274  "Alarm max BEC temp"                     ex: 95:8274
+// 23)  8276  "Alarm max BEC current"                  ex: 12000:8276
+// 24)  8278  "Alarm max discharge"                    ex: 0:8278
+// 25) 12346  "PWM min."                               ex: 81:12346
+// 26) 12352  "Min. Brake-PWM"                         ex: 81:12352
+// 27) 12354  "Max. Brake-PWM"                         ex: 4055:12354
+// 28) 16388  "bitfields" [U24 special]                ex: 1116789:16388
+// 29) 16432  "Maximum RPM"                            ex: 30000:16432
+// 30) 20480  "Model Type"                             ex: 2:20480
 static const uint16_t kontronikParamSlots[KONTRONIK_PARAM_SLOT_COUNT] = {
     8202, 8206, 8208, 8214, 8216, 8218,
     8220, 8226, 8228, 8230, 8232, 8234, 8236, 8246, 8252, 8254,
@@ -1085,7 +1095,7 @@ static void konHsWrite(const char *s)
     serialWriteBuf(escSensorPort, (const uint8_t *)s, len);
 }
 
-// Ensure the MSP parameter payload contains exactly the fixed Kontronik value block.
+// Ensure payload size for compact Kontronik format: model + count + mixed-width slot block.
 static void kontronikEnsureParamPayload(void)
 {
     if (paramPayloadLength != KONTRONIK_PARAM_PAYLOAD_LENGTH) {
@@ -1112,20 +1122,65 @@ static bool kontronikGetCachedRegValue(const uint16_t reg, uint32_t *value)
     return false;
 }
 
-// Serialize fixed slot-order values (u24 each) into MSP payload.
+// Return byte offset for one slot value inside compact payload value-block.
+static uint16_t kontronikSlotValueOffset(const uint8_t slot)
+{
+    const uint16_t base = KONTRONIK_PARAM_VALUES_OFFSET;
+    if (slot < KONTRONIK_PARAM_SPECIAL_U24_SLOT) {
+        return base + slot * KONTRONIK_PARAM_VALUE_SIZE_U16;
+    }
+
+    if (slot == KONTRONIK_PARAM_SPECIAL_U24_SLOT) {
+        return base + KONTRONIK_PARAM_SPECIAL_U24_SLOT * KONTRONIK_PARAM_VALUE_SIZE_U16;
+    }
+
+    return base + (KONTRONIK_PARAM_SPECIAL_U24_SLOT * KONTRONIK_PARAM_VALUE_SIZE_U16) +
+           KONTRONIK_PARAM_VALUE_SIZE_U24 +
+           (slot - KONTRONIK_PARAM_SPECIAL_U24_SLOT - 1) * KONTRONIK_PARAM_VALUE_SIZE_U16;
+}
+
+// Decode one slot value (U16 or U24 special-case) from compact payload.
+static uint32_t kontronikDecodeSlotValue(const uint8_t *payload, const uint8_t slot)
+{
+    const uint16_t offset = kontronikSlotValueOffset(slot);
+    if (slot == KONTRONIK_PARAM_SPECIAL_U24_SLOT) {
+        return (uint32_t)payload[offset] |
+               ((uint32_t)payload[offset + 1] << 8) |
+               ((uint32_t)payload[offset + 2] << 16);
+    }
+
+    return (uint32_t)payload[offset] |
+           ((uint32_t)payload[offset + 1] << 8);
+}
+
+// Encode one slot value (U16 or U24 special-case) into compact payload.
+static void kontronikEncodeSlotValue(uint8_t *payload, const uint8_t slot, const uint32_t value)
+{
+    const uint16_t offset = kontronikSlotValueOffset(slot);
+    if (slot == KONTRONIK_PARAM_SPECIAL_U24_SLOT) {
+        const uint32_t u24 = MIN(value, (uint32_t)KONTRONIK_U24_MAX);
+        payload[offset + 0] = (uint8_t)(u24 & 0xFF);
+        payload[offset + 1] = (uint8_t)((u24 >> 8) & 0xFF);
+        payload[offset + 2] = (uint8_t)((u24 >> 16) & 0xFF);
+        return;
+    }
+
+    const uint16_t u16 = (uint16_t)MIN(value, (uint32_t)UINT16_MAX);
+    payload[offset + 0] = (uint8_t)(u16 & 0xFF);
+    payload[offset + 1] = (uint8_t)((u16 >> 8) & 0xFF);
+}
+
+// Serialize fixed slot-order values into compact payload.
 static void kontronikBuildParamPayload(void)
 {
     kontronikEnsureParamPayload();
     memcpy(paramPayload + KONTRONIK_PARAM_ESC_MODEL_OFFSET, konEscModel, KONTRONIK_PARAM_ESC_MODEL_LEN);
+    paramPayload[KONTRONIK_PARAM_COUNT_OFFSET] = KONTRONIK_PARAM_SLOT_COUNT;
 
     for (uint8_t i = 0; i < KONTRONIK_PARAM_SLOT_COUNT; i++) {
         uint32_t value = 0;
         (void)kontronikGetCachedRegValue(kontronikParamSlots[i], &value);
-        const uint32_t u24 = MIN(value, (uint32_t)KONTRONIK_U24_MAX);
-        const uint16_t offset = KONTRONIK_PARAM_VALUES_OFFSET + i * KONTRONIK_PARAM_VALUE_SIZE_U24;
-        paramPayload[offset + 0] = (uint8_t)(u24 & 0xFF);
-        paramPayload[offset + 1] = (uint8_t)((u24 >> 8) & 0xFF);
-        paramPayload[offset + 2] = (uint8_t)((u24 >> 16) & 0xFF);
+        kontronikEncodeSlotValue(paramPayload, i, value);
     }
 }
 
@@ -1226,17 +1281,22 @@ static void kontronikStoreEscModel(const char *model)
     }
 }
 
-// Validate an MSP write request and enqueue full Kontronik start/data/end write sequence.
+// Validate compact MSP write request and enqueue Kontronik start/data/end write sequence.
+// Only changed slots are sent to ESC ("delta write"), each as "$$value:reg;value:reg\\r\\n".
 static bool kontronikParamCommit(uint8_t cmd)
 {
     if (cmd != 0 || !escSensorPort || paramPayloadLength != KONTRONIK_PARAM_PAYLOAD_LENGTH) {
         return false;
     }
 
-    // Nothing changed in the fixed slot payload.
+    if (paramUpdPayload[KONTRONIK_PARAM_COUNT_OFFSET] != KONTRONIK_PARAM_SLOT_COUNT) {
+        return false;
+    }
+
+    // Nothing changed in the fixed slot value block.
     if (memcmp(paramPayload + KONTRONIK_PARAM_VALUES_OFFSET,
                paramUpdPayload + KONTRONIK_PARAM_VALUES_OFFSET,
-               KONTRONIK_PARAM_SLOT_COUNT * KONTRONIK_PARAM_VALUE_SIZE_U24) == 0) {
+               KONTRONIK_PARAM_VALUE_BLOCK_LENGTH) == 0) {
         return true;
     }
 
@@ -1249,14 +1309,8 @@ static bool kontronikParamCommit(uint8_t cmd)
 
     // Send only changed fixed-order parameters as duplicated command lines.
     for (uint8_t i = 0; i < KONTRONIK_PARAM_SLOT_COUNT; i++) {
-        const uint16_t offsetOld = KONTRONIK_PARAM_VALUES_OFFSET + i * KONTRONIK_PARAM_VALUE_SIZE_U24;
-        const uint16_t offsetNew = offsetOld;
-        const uint32_t oldValue = (uint32_t)paramPayload[offsetOld] |
-            ((uint32_t)paramPayload[offsetOld + 1] << 8) |
-            ((uint32_t)paramPayload[offsetOld + 2] << 16);
-        const uint32_t value = (uint32_t)paramUpdPayload[offsetNew] |
-            ((uint32_t)paramUpdPayload[offsetNew + 1] << 8) |
-            ((uint32_t)paramUpdPayload[offsetNew + 2] << 16);
+        const uint32_t oldValue = kontronikDecodeSlotValue(paramPayload, i);
+        const uint32_t value = kontronikDecodeSlotValue(paramUpdPayload, i);
         if (oldValue == value) {
             continue;
         }
@@ -1418,7 +1472,7 @@ static void kontronikParseAsciiFrame(const uint8_t *frame, const uint16_t frameL
     }
 
     if (frameType == 'E') {
-        // Store frame 2 as compact reg/value pairs for LUA-side mapping.
+        // Store frame 'E' register/value pairs, then rebuild fixed MSP slot payload.
         kontronikStoreParamPairs(payload);
         return;
     }
@@ -4495,7 +4549,7 @@ bool INIT_CODE escSensorInit(void)
         konParamPairCount = 0;
         memset(konEscModel, 0, sizeof(konEscModel));
         konTxQueueReset();
-        paramVer = 1; // Kontronik payload format: 16-byte model text + fixed slot-order 30x u24 values.
+        paramVer = 1; // Kontronik payload format v1: model[16] + count[1] + 30 fixed-order slots (29xU16 + 1xU24).
         paramCommit = kontronikParamCommit;
         // Ensure we always return model field + full fixed-length value block for MSP reads.
         kontronikEnsureParamPayload();
