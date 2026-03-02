@@ -91,7 +91,7 @@ enum {
 
 #define TELEMETRY_BUFFER_SIZE    140
 #define REQUEST_BUFFER_SIZE      64
-#define PARAM_BUFFER_SIZE        108
+#define PARAM_BUFFER_SIZE        96
 #define PARAM_HEADER_SIZE        2
 #define PARAM_HEADER_SIG         0
 #define PARAM_HEADER_VER         1
@@ -993,7 +993,7 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_TXQUEUE_MAX               64
 #define KONTRONIK_WRITE_GAP_US              30000
 
-// Fixed Lua/MSPv1 parameter order (30 slots), with examples from frame:
+// Fixed Lua/MSPv1 parameter order (30 slots), with examples from frame E:
 // Payload encoding (MSPv1 cmd 217/218):
 //   [0..15]   model ASCII (zero-padded)
 //   [16]      slot count (always 30)
@@ -1029,7 +1029,7 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 // 27) 12354  "Max. Brake-PWM"                         ex: 4055:12354
 // 28) 16388  "bitfields" [U24 special]                ex: 1116789:16388
 // 29) 16432  "Maximum RPM"                            ex: 30000:16432
-// 30) 20480  "Model Type"                             ex: 2:20480
+// 30) 20480  "Model Type"                             ex: 3:20480
 static const uint16_t kontronikParamSlots[KONTRONIK_PARAM_SLOT_COUNT] = {
     8202, 8206, 8208, 8214, 8216, 8218,
     8220, 8226, 8228, 8230, 8232, 8234, 8236, 8246, 8252, 8254,
