@@ -979,10 +979,10 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 
 #define KONTRONIK_PARAM_ESC_MODEL_OFFSET    0
 #define KONTRONIK_PARAM_ESC_MODEL_LEN       16
-#define KONTRONIK_PARAM_SLOT_COUNT          32
+#define KONTRONIK_PARAM_SLOT_COUNT          30
 #define KONTRONIK_PARAM_COUNT_OFFSET        (KONTRONIK_PARAM_ESC_MODEL_OFFSET + KONTRONIK_PARAM_ESC_MODEL_LEN)
 #define KONTRONIK_PARAM_VALUES_OFFSET       (KONTRONIK_PARAM_COUNT_OFFSET + 1)
-#define KONTRONIK_PARAM_SPECIAL_U24_SLOT    29  // slot 30 (reg 16388) keeps full u24 range
+#define KONTRONIK_PARAM_SPECIAL_U24_SLOT    27  // slot 28 (reg 16388) keeps full u24 range
 #define KONTRONIK_PARAM_VALUE_SIZE_U16      2
 #define KONTRONIK_PARAM_VALUE_SIZE_U24      3
 #define KONTRONIK_PARAM_VALUE_BLOCK_LENGTH  (((KONTRONIK_PARAM_SLOT_COUNT - 1) * KONTRONIK_PARAM_VALUE_SIZE_U16) + KONTRONIK_PARAM_VALUE_SIZE_U24)
@@ -993,49 +993,47 @@ static void kontronikSensorProcess(timeUs_t currentTimeUs)
 #define KONTRONIK_TXQUEUE_MAX               64
 #define KONTRONIK_WRITE_GAP_US              30000
 
-// Fixed Lua/MSPv1 parameter order (32 slots), with examples from frame E:
+// Fixed Lua/MSPv1 parameter order (30 slots), with examples from frame E:
 // Payload encoding (MSPv1 cmd 217/218):
 //   [0..15]   model ASCII (zero-padded)
-//   [16]      slot count (always 32)
-//   [17..81]  32 slot-values in fixed order
-//   - slots 1..29 and 31..32 are U16 LE
-//   - slot 30 (reg 16388) is U24 LE (special case)
-//  1)  8200  "...at a Cell Voltage (NiCd/NiMH)"       ex: 1200:8200
-//  2)  8202  "...at a Cell Voltage (LiPo)"            ex: 3000:8202
-//  3)  8204  "...at a Cell Voltage (LiFePo)"          ex: 2900:8204
-//  4)  8206  "EMK Brake behavior positive"            ex: 500:8206
-//  5)  8208  "BEC Voltage"                            ex: 5500:8208
-//  6)  8214  "Brake position"                         ex: 1101:8214
-//  7)  8216  "Off position"                           ex: 1101:8216
-//  8)  8218  "Max Position"                           ex: 1501:8218
-//  9)  8220  "RPM Control off"                        ex: 1365:8220
-// 10)  8226  "Slew rate up"                           ex: 1000:8226
-// 11)  8228  "Slew rate down"                         ex: 200:8228
-// 12)  8230  "Startup Time"                           ex: 10000:8230
-// 13)  8232  "P-Gain"                                 ex: 6:8232
-// 14)  8234  "Motor resistance Compensation"          ex: 4:8234
-// 15)  8236  "Discharge Limit"                        ex: 0:8236
-// 16)  8246  "Telemetry"                              ex: 256:8246
-// 17)  8252  "Startup Current Limit"                  ex: 15:8252
-// 18)  8254  "EMK Brake behavior negative"            ex: 105:8254
-// 19)  8264  "Pole Number"                            ex: 2:8264
-// 20)  8266  "Gear Ratio"                             ex: 950:8266
-// 21)  8268  "Alarm min input voltage"                ex: 3500:8268
-// 22)  8270  "Alarm max motor current"                ex: 220:8270
-// 23)  8272  "Alarm max ESC temp"                     ex: 95:8272
-// 24)  8274  "Alarm max BEC temp"                     ex: 95:8274
-// 25)  8276  "Alarm max BEC current"                  ex: 12000:8276
-// 26)  8278  "Alarm max discharge"                    ex: 0:8278
-// 27)  12346  "PWM min."                              ex: 81:12346
-// 28)  12352  "Min. Brake-PWM"                        ex: 81:12352
-// 29)  12354  "Max. Brake-PWM"                        ex: 4055:12354
-// 30)  16388  "bitfields" [U24 special]               ex: 1116789:16388
-// 31)  16432  "Maximum RPM"                           ex: 30000:16432
-// 32)  20480  "Model Type"                            ex: 3:20480
+//   [16]      slot count (always 30)
+//   [17..77]  30 slot-values in fixed order
+//   - slots 1..27 and 29..30 are U16 LE
+//   - slot 28 (reg 16388) is U24 LE (special case)
+//  1)  8202  "...at a Cell Voltage of"                ex: 1200:8202
+//  2)  8206  "EMK Brake behavior positive"            ex: 500:8206
+//  3)  8208  "BEC Voltage"                            ex: 5500:8208
+//  4)  8214  "Brake position"                         ex: 1101:8214
+//  5)  8216  "Off position"                           ex: 1101:8216
+//  6)  8218  "Max Position"                           ex: 1501:8218
+//  7)  8220  "RPM Control off"                        ex: 1365:8220
+//  8)  8226  "Slew rate up"                           ex: 1000:8226
+//  9)  8228  "Slew rate down"                         ex: 200:8228
+// 10)  8230  "Startup Time"                           ex: 10000:8230
+// 11)  8232  "P-Gain"                                 ex: 6:8232
+// 12)  8234  "Motor resistance Compensation"          ex: 4:8234
+// 13)  8236  "Discharge Limit"                        ex: 0:8236
+// 14)  8246  "Telemetry"                              ex: 256:8246
+// 15)  8252  "Startup Current Limit"                  ex: 15:8252
+// 16)  8254  "EMK Brake behavior negative"            ex: 105:8254
+// 17)  8264  "Pole Number"                            ex: 2:8264
+// 18)  8266  "Gear Ratio"                             ex: 950:8266
+// 19)  8268  "Alarm min input voltage"                ex: 3500:8268
+// 20)  8270  "Alarm max motor current"                ex: 220:8270
+// 21)  8272  "Alarm max ESC temp"                     ex: 95:8272
+// 22)  8274  "Alarm max BEC temp"                     ex: 95:8274
+// 23)  8276  "Alarm max BEC current"                  ex: 12000:8276
+// 24)  8278  "Alarm max discharge"                    ex: 0:8278
+// 25) 12346  "PWM min."                               ex: 81:12346
+// 26) 12352  "Min. Brake-PWM"                         ex: 81:12352
+// 27) 12354  "Max. Brake-PWM"                         ex: 4055:12354
+// 28) 16388  "bitfields" [U24 special]                ex: 1116789:16388
+// 29) 16432  "Maximum RPM"                            ex: 30000:16432
+// 30) 20480  "Model Type"                             ex: 3:20480
 static const uint16_t kontronikParamSlots[KONTRONIK_PARAM_SLOT_COUNT] = {
-    8200, 8202, 8204, 8206, 8208, 8214,
-    8216, 8218, 8220, 8226, 8228, 8230, 8232, 8234, 8236, 8246,
-    8252, 8254, 8264, 8266, 8268, 8270, 8272, 8274, 8276, 8278,
+    8202, 8206, 8208, 8214, 8216, 8218,
+    8220, 8226, 8228, 8230, 8232, 8234, 8236, 8246, 8252, 8254,
+    8264, 8266, 8268, 8270, 8272, 8274, 8276, 8278,
     12346, 12352, 12354, 16388, 16432, 20480
 };
 
@@ -4551,7 +4549,7 @@ bool INIT_CODE escSensorInit(void)
         konParamPairCount = 0;
         memset(konEscModel, 0, sizeof(konEscModel));
         konTxQueueReset();
-        paramVer = 1; // Kontronik payload format v1: model[16] + count[1] + 32 fixed-order slots (31xU16 + 1xU24).
+        paramVer = 1; // Kontronik payload format v1: model[16] + count[1] + 30 fixed-order slots (29xU16 + 1xU24).
         paramCommit = kontronikParamCommit;
         // Ensure we always return model field + full fixed-length value block for MSP reads.
         kontronikEnsureParamPayload();
