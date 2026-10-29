@@ -175,7 +175,7 @@ Dokumentationsrepository. Keine Hardwarefreigabe allein aus Parser-Unit-Tests.
 - Physischer Adapter fehlt absichtlich. Auch mit aktiviertem Flag meldet CAPS
   nur corePresent, backend0, targetMask0 und keine Read-/Write-Capabilities.
   OPEN wird ohne Pinänderung als unsupported beantwortet.
-- Bekannte ESC17.2-Identität erhält Schema1; unbekannte Revisionen sind nur
+- Bekannte ESC17.2- und ESC17.3-Identitäten erhalten Schema1; unbekannte Revisionen sind nur
   identifizierbar, GET/SET/SAVE werden abgewiesen.
 - SET liest alle neun freigegebenen Keys erneut und prüft die Frequenzrelation.
   SAVE bestätigt nur CLI-Abschluss, keine Persistenz über Stromunterbrechung.
@@ -246,3 +246,17 @@ Zusätzlich besteht ein echter Cross-Repository-Test des C-Kerns gegen den
 Lua-Codec und die Lua-Sessionsteuerung, mit injiziertem Fake-Serial-Adapter,
 Normalisierung, einmaligem SAVE, Keepalive und verlorenen SAVE-/CLOSE-Antworten.
 Der Test liegt in der Suite unter bin/escape32/verify_bridge.py.
+
+### RF007 / ESCape32 17.3: geprüfte Erweiterung
+
+Die Nutzerkonfiguration und der physische Folgeauftrag stehen in
+[escape32-rf007.md](escape32-rf007.md). Standard-MOTOR1 ist PA09/TIM1_CH2 auf dem
+STM32F722. Dies aktiviert keine Ziel-Capability und ersetzt keinen RX-/Recoverytest.
+Schema1 akzeptiert explizit 17.2 und 17.3 nach Vergleich der byteidentischen
+Parameter-/CLI-/checkcfg-Quellen; unbekannte 17.4/16.3 bleiben gesperrt.
+
+Codecommit [118af7e9bb516e4b4eda6c24f2f49cf60cd88480](https://github.com/garfield2412/rotorflight-firmware/commit/118af7e9bb516e4b4eda6c24f2f49cf60cd88480):
+[CI Run 40831202850](https://github.com/garfield2412/rotorflight-firmware/actions/runs/40831202850)
+erfolgreich mit nativem Core/Sanitizern und STM32F7X2 Feature aus/an.
+Die aktualisierte Suite testet diesen gepinnten Companion ebenfalls erfolgreich
+in [Run 40831340474](https://github.com/garfield2412/rotorflight-lua-ethos-suite/actions/runs/40831340474).
