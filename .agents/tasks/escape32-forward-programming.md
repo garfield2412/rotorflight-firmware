@@ -1,7 +1,8 @@
 # Agentenauftrag: ESCape32-Bridge in Rotorflight-Firmware
 
-Status: Implementierungsauftrag und technischer Draft; noch keine Runtime-Änderungen.
-Der gemeinsame MSP-Vertrag und der Hardware-Transport sind noch nicht umgesetzt.
+Status: experimenteller Integrationsdraft mit implementiertem portablem
+Sessioncore, CLI-Parser und optionaler MSP-Anbindung. Contract-Version1 und
+Testvektoren liegen vor; ein validierter physischer Hardwareadapter fehlt noch.
 Die Aufgabenbeschreibung liegt unter .agents/tasks/, da AGENTS.md neue technische
 Dokumente im lokalen docs/-Verzeichnis ausschließt.
 
@@ -162,3 +163,62 @@ Compatibility und Testing; verlinke Suite-Companion, Vertragsversion und
 Testvektoren. Liste reale Builds/Tests und offene Bench-Nachweise getrennt.
 Melde erforderliche Benutzer-/Internals-Dokumentation im dafür vorgesehenen
 Dokumentationsrepository. Keine Hardwarefreigabe allein aus Parser-Unit-Tests.
+
+## Implementierungsstand dieses Drafts (2026-10-29)
+
+- Implementiert: portabler Sessioncore und begrenzter CLI-Parser unter
+  src/main/io/escape32.{c,h}; FakeSerial-/FakeTime-Tests, gemeinsames JSON-Fixture.
+- MSP-Anbindung: fork-lokales experimentelles Envelope 0x5FE0, Contract-Version1.
+  Nur mit USE_ESCAPE32_FORWARD_PROGRAMMING aktiv; kein Target definiert dieses
+  Flag standardmäßig. Keine globale API-/Releaseversion geändert.
+- Scheduler: taskMain tickt den Core unabhängig vom MSP-Heartbeat.
+- Physischer Adapter fehlt absichtlich. Auch mit aktiviertem Flag meldet CAPS
+  nur corePresent, backend0, targetMask0 und keine Read-/Write-Capabilities.
+  OPEN wird ohne Pinänderung als unsupported beantwortet.
+- Bekannte ESC17.2-Identität erhält Schema1; unbekannte Revisionen sind nur
+  identifizierbar, GET/SET/SAVE werden abgewiesen.
+- SET liest alle neun freigegebenen Keys erneut und prüft die Frequenzrelation.
+  SAVE bestätigt nur CLI-Abschluss, keine Persistenz über Stromunterbrechung.
+
+### Konkrete Grenze des vorhandenen Hardwarepfads
+
+src/main/drivers/serial_escserial.c ist kein direkt nutzbarer Adapter:
+PROTOCOL_KISS initialisiert nur TX, escEnablePassthrough liest in mode2 kein RX,
+und processTxStateBL schaltet RX nur bei BLHELI/CASTLE um. openEscSerial und
+closeEscSerial sind statisch; der bestehende Passthrough ist blockierend.
+Es wird zusätzlich ein ESCSERIAL-Timer benötigt; N-Channel-Motorpads werden für
+RX abgewiesen. HAL TIM_DeInit ist ein Stub. Ein geprüfter Wiederherstellungspfad
+für Motor-Timer/DMA und Rückkehr aus der ESC-CLI ist damit nicht belegt.
+
+Nächster Hardwareauftrag: einen nicht blockierenden, bidirektionalen 38400-8N1-
+Adapter mit expliziter Timer-/DMA-Ownership, dokumentierter Stromsequenz, Flush
+alter RX-/TX-Daten und nachgewiesener Recovery entwickeln. acquire/release
+müssen alte Bytes und Callbacks entfernen. Bei fehlender Recovery muss der
+Arming-Inhibit bestehen bleiben. CAPS erst nach Board-/ESC-Bench-Nachweis für
+Ziele erweitern; keine Aktivierung durch bloßes Setzen eines Build-Flags.
+
+Aktuelle Restart-Latch-Einschränkung: liefert release false, bleibt inhibited
+gesetzt und die Session wird inaktiv. Der Core bietet danach keinen erneuten
+Recovery-Poll; Init lehnt den Reset ab und OPEN bleibt gesperrt. Ein alleiniger
+ESC-Power-Cycle bei weiter versorgtem FC hebt diese Sperre deshalb nicht auf.
+Im aktuellen Draft ist ein FC-Neustart erforderlich. Der Hardware-Folgeauftrag
+muss einen explizit geprüften Rückweg aus RESTART_REQUIRED ergänzen; ein Delay
+oder die bloße Annahme eines ESC-Neustarts darf den Inhibit nicht entfernen.
+
+### Ausgeführte Prüfung / offene Abnahme
+
+Host: sh src/test/run_escape32_tests.sh mit GCC C11, -Wall -Wextra -Werror und
+-pedantic erfolgreich; zusätzlich AddressSanitizer und UndefinedBehaviorSanitizer
+erfolgreich mit ASAN_OPTIONS=detect_leaks=0. LeakSanitizer ist wegen ptrace in der
+Arbeitsumgebung nicht ausführbar. Der Core verwendet keine Heap-Allokation.
+Eine separate GitHub-Actions-Workflowdatei führt den portablen Harness aus.
+Sie enthält außerdem eine STM32F7X2-ARM-Buildmatrix mit deaktivierter und
+aktivierter USE_ESCAPE32_FORWARD_PROGRAMMING-Option. Der Workflow ist vorbereitet;
+ein tatsächlicher CI-Erfolg muss nach dem Branch-Push separat geprüft werden.
+
+ARM-Builds, Flash-/RAM-Messung auf MCU, echte Motorpin-Kommunikation,
+CLI-Eintritt/Recovery und Funk-/ESC-Benchtests stehen aus. Shell-Netzwerk scheitert
+am Proxy-Verbindungsaufbau; ARM-Toolchain und vollständiger Checkout fehlen.
+Der native GCC-Test ersetzt keinen STM32F7X2-Build. Dieser Branch ist ein
+experimenteller Integrationsdraft, noch keine funktionierende ESC-Programmierung.
+

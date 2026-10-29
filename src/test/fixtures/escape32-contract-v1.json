@@ -1,0 +1,378 @@
+{
+  "version": 1,
+  "status": "experimental; no upstream allocation; production hardware adapter absent",
+  "command": 24544,
+  "request": {
+    "CAPS": {
+      "op": 0,
+      "length": 2,
+      "fields": {
+        "0": "version=1",
+        "1": "op=0"
+      }
+    },
+    "header": {
+      "0": "version u8",
+      "1": "operation u8",
+      "2": "sessionToken u32LE",
+      "6": "requestId u16LE"
+    },
+    "OPEN": {
+      "op": 1,
+      "length": 14,
+      "fields": {
+        "8": "target u8",
+        "9": "backend u8=1",
+        "10": "clientNonce u32LE, nonzero"
+      }
+    },
+    "STATUS": {
+      "op": 2,
+      "length": 8
+    },
+    "GET": {
+      "op": 3,
+      "length": 9,
+      "fields": {
+        "8": "key u8"
+      }
+    },
+    "SET": {
+      "op": 4,
+      "length": 13,
+      "fields": {
+        "8": "key u8",
+        "9": "value i32LE raw"
+      }
+    },
+    "SAVE": {
+      "op": 5,
+      "length": 8
+    },
+    "CLOSE": {
+      "op": 6,
+      "length": 8
+    }
+  },
+  "reply": {
+    "length": 32,
+    "fields": {
+      "0": "version u8=1",
+      "1": "requested operation u8",
+      "2": "result u8",
+      "3": "state u8",
+      "4": "sessionToken u32LE",
+      "8": "lastAcceptedRequestId u16LE",
+      "10": "target u8 or255",
+      "11": "flags u8",
+      "12": "key u8 or255",
+      "13": "ESC revision u8",
+      "14": "patch u8",
+      "15": "schema u8",
+      "16": "value i32LE",
+      "20": "backend u8 (0 absent,1 CLI)",
+      "21": "maxRequest u8=14",
+      "22": "maxReply u8=32",
+      "23": "reserved0",
+      "24": "ownerTimeoutMs u16LE=10000",
+      "26": "capabilities u16LE",
+      "28": "validatedTargets u16LE bitmask",
+      "30": "reserved u16LE=0"
+    }
+  },
+  "flags": {
+    "readonly": 1,
+    "dirty": 2,
+    "restartRequired": 4,
+    "valueValid": 8,
+    "terminal": 16
+  },
+  "capabilities": {
+    "corePresent": 1,
+    "validatedCLI": 2,
+    "read": 4,
+    "write": 8
+  },
+  "states": {
+    "IDLE": 0,
+    "WAIT_POWER": 1,
+    "IDENTIFY": 2,
+    "READY": 3,
+    "READ": 4,
+    "SET": 5,
+    "SAVE": 6,
+    "VERIFY": 7,
+    "ERROR": 8,
+    "RESTART_REQUIRED": 9
+  },
+  "results": {
+    "OK": 0,
+    "UNSUPPORTED": 1,
+    "BUSY": 2,
+    "INVALID_SESSION": 3,
+    "INVALID_REQUEST": 4,
+    "POWER_CYCLE_NEEDED": 5,
+    "TIMEOUT": 6,
+    "PROTOCOL_ERROR": 7,
+    "NORMALIZED": 8,
+    "OUTCOME_UNKNOWN": 9,
+    "VERIFY_FAILED": 10,
+    "RANGE": 11,
+    "STALE_REQUEST": 12
+  },
+  "keys": [
+    {
+      "id": 0,
+      "name": "revdir",
+      "min": 0,
+      "max": 1,
+      "scale": 1
+    },
+    {
+      "id": 1,
+      "name": "timing",
+      "min": 1,
+      "max": 31,
+      "scale": 0.9375
+    },
+    {
+      "id": 2,
+      "name": "freq_min",
+      "min": 16,
+      "max": 48,
+      "scale": 1
+    },
+    {
+      "id": 3,
+      "name": "freq_max",
+      "min": 16,
+      "max": 96,
+      "scale": 1
+    },
+    {
+      "id": 4,
+      "name": "duty_spup",
+      "min": 1,
+      "max": 100,
+      "scale": 1
+    },
+    {
+      "id": 5,
+      "name": "duty_ramp",
+      "min": 0,
+      "max": 100,
+      "scale": 1
+    },
+    {
+      "id": 6,
+      "name": "duty_rate",
+      "min": 1,
+      "max": 100,
+      "scale": 0.1
+    },
+    {
+      "id": 7,
+      "name": "prot_temp",
+      "min": 0,
+      "max": 140,
+      "scale": 1
+    },
+    {
+      "id": 8,
+      "name": "prot_curr",
+      "min": 0,
+      "max": 999,
+      "scale": 1
+    }
+  ],
+  "semantics": {
+    "session": "Owner is MSP descriptor plus nonzero session token. Token is not authentication.",
+    "open": "Request token=0, requestId nonzero, nonce nonzero. Identical owner/nonce/target/backend/requestId OPEN retries return current same session. Other OPEN returns BUSY. OPEN receipt is terminal only after READY or failure.",
+    "ordering": "GET/SET/SAVE/CLOSE IDs strictly increase with no wrap in session. Last identical request returns current cached result; same ID with different payload INVALID_REQUEST; lower ID STALE_REQUEST. STATUS ID0 reads last result; nonzero must match last accepted ID.",
+    "poll": "STATUS updates only owner heartbeat, not result/request identity. BUSY while operation pending, terminal bit clear. Completion retained until next accepted request or close.",
+    "close": "CLOSE may abort pending operation. release does not claim ESC restart. If transport entered and not positively recovered, POWER_CYCLE_NEEDED/RESTART_REQUIRED remains and arming inhibit retained. Closed session retries are retained until next OPEN; STATUS can observe retained close result.",
+    "defaults": "No adapter means CAPS backend0 capabilities1 validatedTargets0 flags17; OPEN unsupported without pin changes.",
+    "save": "SET is volatile RAM + readback. SAVE OK means CLI completion, not power-cycle persistence. Unknown write outcomes are distinct and cannot auto-retry save.",
+    "limits": "Fixed32 replies, maximum14 requests, owner timeout10000ms, CLI transaction timeout2000ms; tests and clients poll while busy.",
+    "identity": "Schema1 initially ESCape32 rev17.2 pinned source; unknown revision identity is exposed read-only schema0. No arbitrary CLI or BEC/mode/reset/throttle operations."
+  },
+  "vectors": [
+    {
+      "name": "disabled-adapter CAPS",
+      "request": [
+        1,
+        0
+      ],
+      "reply": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        17,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        14,
+        32,
+        0,
+        16,
+        39,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "bad CAPS length",
+      "request": [
+        1,
+        0,
+        0
+      ],
+      "reply": [
+        1,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        17,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        14,
+        32,
+        0,
+        16,
+        39,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "unknown version",
+      "request": [
+        2,
+        0
+      ],
+      "reply": [
+        1,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        17,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        14,
+        32,
+        0,
+        16,
+        39,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "unsupported OPEN",
+      "request": [
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        120,
+        86,
+        52,
+        18
+      ],
+      "reply": [
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        17,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        14,
+        32,
+        0,
+        16,
+        39,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}

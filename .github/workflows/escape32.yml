@@ -1,0 +1,54 @@
+name: ESCape32 portable core
+
+on:
+  push:
+    branches: [draft/escape32-forward-programming]
+    paths:
+      - 'src/main/io/escape32.*'
+      - 'src/main/msp/msp.c'
+      - 'src/main/msp/msp_protocol_v2_rotorflight.h'
+      - 'src/main/fc/tasks.c'
+      - 'make/source.mk'
+      - 'src/test/unit/escape32_session_unittest.c'
+      - 'src/test/run_escape32_tests.sh'
+      - 'src/test/fixtures/escape32-contract-v1.json'
+      - '.github/workflows/escape32.yml'
+  pull_request:
+    paths:
+      - 'src/main/io/escape32.*'
+      - 'src/main/msp/msp.c'
+      - 'src/main/msp/msp_protocol_v2_rotorflight.h'
+      - 'src/main/fc/tasks.c'
+      - 'make/source.mk'
+      - 'src/test/unit/escape32_session_unittest.c'
+      - 'src/test/run_escape32_tests.sh'
+      - 'src/test/fixtures/escape32-contract-v1.json'
+      - '.github/workflows/escape32.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  session-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict portable C build and fake-serial tests
+        run: sh src/test/run_escape32_tests.sh
+      - name: Address and undefined-behavior sanitizers
+        env:
+          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -g
+        run: sh src/test/run_escape32_tests.sh
+
+  arm-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        options: ['', 'USE_ESCAPE32_FORWARD_PROGRAMMING']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the repository ARM toolchain
+        run: make arm_sdk_install
+      - name: Compile STM32F7X2 with experimental feature off/on
+        run: make -j2 TARGET=STM32F7X2 OPTIONS="${{ matrix.options }}"

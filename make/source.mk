@@ -58,6 +58,7 @@ COMMON_SRC = \
             io/beeper.c \
             io/piniobox.c \
             io/serial.c \
+            io/escape32.c \
             io/smartaudio_protocol.c \
             io/statusindicator.c \
             io/tramp_protocol.c \
@@ -475,3 +476,4 @@ INCLUDE_DIRS += $(OLC_DIR)
 SRC += $(OLC_DIR)/olc.c
 SIZE_OPTIMISED_SRC += $(OLC_DIR)/olc.c
 endif
+

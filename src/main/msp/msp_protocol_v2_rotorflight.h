@@ -50,3 +50,9 @@
 // claimed by an open PR (#541).
 #define MSP2_GET_FBUS_SENSORS_STATUS        0x5F15
 
+// Fork-local experimental envelope; NOT an upstream command allocation.
+// Enabled only with USE_ESCAPE32_FORWARD_PROGRAMMING. Contract version 1 is
+// independent of the global MSP API version. No production hardware adapter.
+#define MSP2_EXPERIMENTAL_ESCAPE32          0x5FE0
+
+

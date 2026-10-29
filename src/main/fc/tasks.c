@@ -121,6 +121,11 @@
 
 #include "tasks.h"
 
+#ifdef USE_ESCAPE32_FORWARD_PROGRAMMING
+#include "drivers/time.h"
+#include "io/escape32.h"
+#endif
+
 // taskUpdateRxMain() has occasional peaks in execution time so normal moving average duration estimation doesn't work
 // Decay the estimated max task duration by 1/(1 << RX_TASK_DECAY_SHIFT) on every invocation
 #define RX_TASK_DECAY_SHIFT 6
@@ -130,6 +135,11 @@
 static void taskMain(timeUs_t currentTimeUs)
 {
     UNUSED(currentTimeUs);
+
+#ifdef USE_ESCAPE32_FORWARD_PROGRAMMING
+    // Runs independently of MSP polling, including after owner/link loss.
+    escape32Process(millis());
+#endif
 
 #ifdef USE_SDCARD
     afatfs_poll();
@@ -651,3 +661,4 @@ void tasksInit(void)
 #endif
 
 }
+
