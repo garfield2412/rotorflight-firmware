@@ -216,9 +216,33 @@ Sie enthält außerdem eine STM32F7X2-ARM-Buildmatrix mit deaktivierter und
 aktivierter USE_ESCAPE32_FORWARD_PROGRAMMING-Option. Der Workflow ist vorbereitet;
 ein tatsächlicher CI-Erfolg muss nach dem Branch-Push separat geprüft werden.
 
-ARM-Builds, Flash-/RAM-Messung auf MCU, echte Motorpin-Kommunikation,
-CLI-Eintritt/Recovery und Funk-/ESC-Benchtests stehen aus. Shell-Netzwerk scheitert
+STM32F7X2-Builds mit Feature aus/an sind inzwischen in GitHub Actions bestanden
+(siehe nachfolgenden Nachweis). Echte Motorpin-Kommunikation, CLI-Eintritt/Recovery,
+weitere MCU-Familien und Funk-/ESC-Benchtests stehen aus. Shell-Netzwerk scheitert
 am Proxy-Verbindungsaufbau; ARM-Toolchain und vollständiger Checkout fehlen.
 Der native GCC-Test ersetzt keinen STM32F7X2-Build. Dieser Branch ist ein
 experimenteller Integrationsdraft, noch keine funktionierende ESC-Programmierung.
 
+
+### Unabhängige Koordinator-Prüfung
+
+Code-Commit: [9c6273aa0afc61277a9cfeca96bb2b82740a1267](https://github.com/garfield2412/rotorflight-firmware/commit/9c6273aa0afc61277a9cfeca96bb2b82740a1267).
+[GitHub Actions Run 40829033784](https://github.com/garfield2412/rotorflight-firmware/actions/runs/40829033784):
+alle drei Jobs erfolgreich: nativer Core mit Sanitizern sowie vollständiger
+STM32F7X2-Build mit deaktiviertem und aktiviertem USE_ESCAPE32_FORWARD_PROGRAMMING.
+Keine globale MSP-API-/Firmware-Releaseversion wurde dafür geändert.
+
+GNU size für diesen STM32F7X2-Build (Bytes):
+
+| Feature | text | data | bss |
+| --- | ---: | ---: | ---: |
+| aus | 444762 | 11152 | 121444 |
+| an | 448634 | 11152 | 121668 |
+
+Differenz in diesem Build: +3872 Bytes text und +224 Bytes bss. Dies ist eine
+Linker-/Buildmessung, keine Laufzeit-Stack- oder Hardware-Sicherheitsfreigabe.
+
+Zusätzlich besteht ein echter Cross-Repository-Test des C-Kerns gegen den
+Lua-Codec und die Lua-Sessionsteuerung, mit injiziertem Fake-Serial-Adapter,
+Normalisierung, einmaligem SAVE, Keepalive und verlorenen SAVE-/CLOSE-Antworten.
+Der Test liegt in der Suite unter bin/escape32/verify_bridge.py.
