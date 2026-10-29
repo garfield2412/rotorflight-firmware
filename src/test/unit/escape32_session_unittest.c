@@ -108,7 +108,7 @@ static void reset(void)
 {
     memset(&fake, 0, sizeof(fake));
     fake.safe = fake.ready = fake.recover = fake.autoReply = true;
-    fake.identity = "ESCape32 rev17.2 [TEST]";
+    fake.identity = "ESCape32 rev17.3 [TEST]";
     const int32_t initial[] = {0, 16, 24, 48, 15, 0, 30, 0, 0};
     memcpy(fake.values, initial, sizeof(initial));
     escape32Init(&adapter, &fake);
@@ -155,7 +155,7 @@ static void openSession(void)
     token = get32(reply + 4);
     assert(token && fake.acquired == 1 && fake.inhibited);
     pump();
-    assert(reply[2] == ESC32_OK && reply[3] == ESC32_READY && reply[15] == 1);
+    assert(reply[2] == ESC32_OK && reply[3] == ESC32_READY && reply[15] == 1 && reply[14] == 3);
 }
 
 static void closeSession(uint16_t id)
@@ -349,6 +349,52 @@ static void testSafetyAndUnknownOutcome(void)
     closeSession(3);
 }
 
+static void testExactSupportedRevisions(void)
+{
+    static const struct {
+        const char *identity;
+        uint8_t revision, patch, schema;
+    } cases[] = {
+        {"ESCape32 rev17.2 [COMPAT]", 17, 2, 1},
+        {"ESCape32 rev17.3 [PRIMARY]", 17, 3, 1},
+        {"ESCape32 rev17.4 [UNKNOWN]", 17, 4, 0},
+        {"ESCape32 rev16.3 [UNKNOWN]", 16, 3, 0}
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        reset();
+        fake.identity = cases[i].identity;
+        header(ESC32_OPEN, 1);
+        request[9] = 1;
+        put32(request + 10, 0x17217300u + i);
+        call(14);
+        token = get32(reply + 4);
+        pump();
+        assert(reply[2] == ESC32_OK && reply[3] == ESC32_READY);
+        assert(reply[13] == cases[i].revision && reply[14] == cases[i].patch);
+        assert(reply[15] == cases[i].schema);
+        assert(!!(reply[11] & ESC32_READONLY) == !cases[i].schema);
+        const unsigned writes = fake.writes;
+        header(ESC32_GET, 2);
+        request[8] = 1;
+        call(9);
+        if (cases[i].schema) {
+            pump();
+            assert(reply[2] == ESC32_OK && get32(reply + 16) == 16);
+        } else {
+            assert(reply[2] == ESC32_UNSUPPORTED);
+            header(ESC32_SET, 2);
+            request[8] = 1;
+            put32(request + 9, 18);
+            call(13);
+            assert(reply[2] == ESC32_UNSUPPORTED);
+            header(ESC32_SAVE, 2);
+            call(8);
+            assert(reply[2] == ESC32_UNSUPPORTED && fake.writes == writes);
+        }
+        closeSession(3);
+    }
+}
+
 static void testRestartRequired(void)
 {
     reset();
@@ -375,6 +421,7 @@ int main(void)
     testInvalidAndWatchdog();
     testParser();
     testSafetyAndUnknownOutcome();
+    testExactSupportedRevisions();
     testRestartRequired();
     puts("ESCape32 portable session tests passed");
     return 0;

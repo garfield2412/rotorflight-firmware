@@ -11,7 +11,11 @@ typedef struct {
     int32_t max;
 } setting_t;
 
-/* Raw integers from ESCape32 72004eff / prog.c; never AM32 offsets. */
+/* Raw integers from ESCape32 17.3 commit
+ * 1d718c143380c3eb7e6581478990e1496632e5b8, byte-identical to 17.2 at
+ * 734097d2825deb49328342335e931ec18ce5823d. Shared prog.c blob:
+ * 21885a08a0d0d1e6c022e8db91d1685a24589127; checkcfg/util.c blob:
+ * d450d1f4a9a569701914ec327666b05111d38d43. Never AM32 offsets. */
 static const setting_t settings[ESCAPE32_KEY_COUNT] = {
     {"revdir", 0, 1}, {"timing", 1, 31}, {"freq_min", 16, 48},
     {"freq_max", 16, 96}, {"duty_spup", 1, 100}, {"duty_ramp", 0, 100},
@@ -269,7 +273,7 @@ static bool parseIdentity(const char *line)
     }
     session.revision = revision;
     session.patch = patch;
-    session.schema = revision == 17 && patch == 2 ? 1 : 0;
+    session.schema = revision == 17 && (patch == 2 || patch == 3) ? 1 : 0;
     return true;
 }
 

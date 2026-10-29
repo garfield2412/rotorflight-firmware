@@ -194,7 +194,7 @@
     "defaults": "No adapter means CAPS backend0 capabilities1 validatedTargets0 flags17; OPEN unsupported without pin changes.",
     "save": "SET is volatile RAM + readback. SAVE OK means CLI completion, not power-cycle persistence. Unknown write outcomes are distinct and cannot auto-retry save.",
     "limits": "Fixed32 replies, maximum14 requests, owner timeout10000ms, CLI transaction timeout2000ms; tests and clients poll while busy.",
-    "identity": "Schema1 initially ESCape32 rev17.2 pinned source; unknown revision identity is exposed read-only schema0. No arbitrary CLI or BEC/mode/reset/throttle operations."
+    "identity": "Schema1 supports exactly ESCape32 revision17 patch2 or patch3. CLI CFG_MAP and checkcfg are byte-identical between pinned17.2 and17.3 sources. Unknown revisions, including17.4 and16.3, expose identity-only schema0 and reject GET/SET/SAVE. No arbitrary CLI or BEC/mode/reset/throttle operations."
   },
   "vectors": [
     {
@@ -374,5 +374,14 @@
         0
       ]
     }
-  ]
+  ],
+  "identitySources": {
+    "17.2": "734097d2825deb49328342335e931ec18ce5823d",
+    "17.3": "1d718c143380c3eb7e6581478990e1496632e5b8",
+    "17.3ReleaseTag": "rel17",
+    "prog.cIdenticalBlob": "21885a08a0d0d1e6c022e8db91d1685a24589127",
+    "util.cIdenticalBlob": "d450d1f4a9a569701914ec327666b05111d38d43",
+    "sourceRepository": "https://github.com/neoxic/ESCape32",
+    "note": "The original master72004eff snapshot was already after17.3; its earlier17.2 label was incorrect. The nine parameter definitions remain valid for both explicit versions."
+  }
 }
