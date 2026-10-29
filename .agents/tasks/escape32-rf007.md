@@ -69,7 +69,7 @@ mit dem tatsächlichen DShot-Ausgabepfad abgestimmt werden.
 - common.h und defs.h sind identisch. main.c ändert nur REVPATCH2 nach3.
   io.c ändert DShot-Framingschutz, keine CLI-Kommandos.
 
-Schema1 unterstützt deshalb genau17.2 und17.3. Alle neun Parameter bleiben
+Schema 1 unterstützt deshalb genau17.2 und17.3. Alle neun Parameter bleiben
 identisch; keine Wirelayout-, Command-ID- oder Contractversionsänderung nötig:
 
 | Key | Rohbereich | Anzeige / Besonderheit |
@@ -89,12 +89,32 @@ GET, SET und SAVE werden abgelehnt. Vollständige Identität vor jeder Session
 lesen. Die frühere Beschreibung des master72004eff-Snapshots als17.2 war falsch:
 dieser Stand liegt bereits nach17.3; die Parameterdefinitionen waren identisch.
 
+## Wi-Fi-Link als Vorlage für den physischen Adapter
+
+Die [geprüfte Referenz](https://github.com/garfield2412/rotorflight-lua-ethos-suite/blob/draft/escape32-forward-programming/docs/reference/escape32/wifi-link-reference.md) beschreibt die vorhandene ESP32-
+Implementierung am Commit 40af21ccfafd9cb8d1c9b951d57b54f3e36bd21f. main/main.c
+initialisiert 38400/8N1, sendet Textbefehle und liest bis zum CLI-Terminator;
+main/root.html verwendet Identität/Einstellungsliste, getter/setter und save.
+Der Lese-/Schreibpfad des ESC ist damit keine offene Protokollannahme mehr.
+
+Der konkrete Folgeauftrag steht in [escape32-wifi-port.md](escape32-wifi-port.md).
+Vom Wi-Fi-Link das serielle Verhalten übernehmen, Browser/Wi-Fi und Bootloader
+abtrennen. Eventqueue-Waits und blockierende Reads müssen durch begrenzte
+Schedulerarbeit ersetzt werden. Getrennte ESP32-RX-/TX-Pins und deren
+Beschaltung belegen keinen elektrischen Rückkanal am RF007-ESC-Stecker.
+Die ESP-IDF-Bezeichnung UART_MODE_RS485_HALF_DUPLEX ist kein Beleg für einen
+benötigten externen RS485-Transceiver.
+
+Die Referenz stellt keine FC-Timer-/DMA-/DShot-Recovery bereit. Folgende
+Implementierungsfolge muss deshalb RF007-spezifisch abgearbeitet werden.
+
 ## Implementierungsfolge für den physischen Adapter
 
 1. Tatsächliche FC-Resources, Timer/DMA-Belegung, DShot-Modus und Boardrevision
    erfassen. Elektrischen Signalweg PA09 zum ESC-Stecker über Schaltplan oder
    Messung prüfen: Richtungspuffer, Pegel, Pulls und Eingangsschutz.
-2. Einen nicht blockierenden 38400-8N1-Halbduplex-Adapter entwerfen. MCU-seitige
+2. Das UART-Verhalten der Wi-Fi-Referenz in einen nicht blockierenden
+   38400-8N1-Halbduplex-Adapter portieren. MCU-seitige
    Capture-Fähigkeit reicht allein nicht. Vorhandene Timer-/DMA-Ownership und
    Interrupt-Prioritäten prüfen; konfliktfreien Zeitgeber begründet auswählen.
 3. Exklusiven Arming-Inhibit setzen, aktive Overrides ablehnen, DShot kontrolliert
@@ -117,7 +137,9 @@ dieser Stand liegt bereits nach17.3; die Parameterdefinitionen waren identisch.
 ## Erforderliche Bench-Abnahme
 
 - FC-/ESC-Target, Revisionen, Pinbelegung, Stromsequenz und Messaufbau festhalten.
-- CLI-info und mindestens einen Parameter über PA09 bidirektional lesen.
+- CLI-info und mindestens einen Parameter über PA09 bidirektional lesen;
+  rohe TX/RX-Daten und Abschlussstatus aufzeichnen. Falls verfügbar, dieselben
+  statischen Werte in einer getrennten Wi-Fi-Link-Session vergleichen.
 - ESC17.3 ändern, normalisierten Wert lesen, genau einmal speichern und nach
   echtem ESC-Neustart auf Persistenz prüfen. prot_temp-/Frequenzabhängigkeiten
   und gegebenenfalls fehlenden Stromsensor berücksichtigen.

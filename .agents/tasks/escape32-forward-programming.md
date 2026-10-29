@@ -24,6 +24,20 @@ ausgewählten Motor-Signalleitung. Der erste Meilenstein ist ein bidirektionaler
 Transportnachweis, anschließend Lesen, erst danach Schreiben und Speichern.
 Firmware-Flashing und Änderungen an ESCape32 selbst gehören nicht zum Umfang.
 
+## Bestehende Wi-Fi-Referenz und nächster Implementierungsschritt
+
+Der offizielle ESCape32 Wi-Fi Link implementiert bereits UART-RX/TX und
+CLI-Lesen/Schreiben/Speichern. Unsere Aufgabe ist die Portierung dieses
+seriellen Verhaltens auf RF007 einschließlich DShot-Ressourcen und Recovery.
+Die [Referenzauswertung](https://github.com/garfield2412/rotorflight-lua-ethos-suite/blob/draft/escape32-forward-programming/docs/reference/escape32/wifi-link-reference.md) enthält die geprüften Quellstellen am
+Commit 40af21ccfafd9cb8d1c9b951d57b54f3e36bd21f, die Abgrenzung des Browser-
+und Bootloaderteils sowie die Grenzen des bisherigen Nachweises.
+
+Arbeite den konkreten [Wi-Fi-Portierungsauftrag](escape32-wifi-port.md) mit dem
+[RF007-Profil](escape32-rf007.md) ab. Der Core und Contract v1 existieren bereits;
+es wird kein neues ESC-Parameterprotokoll benötigt. Wi-Fi-Funktion, blockierende
+ESP32-Aufrufe und volle show-Listen werden nicht in den FC übernommen.
+
 ## 1. Machbarkeit und aktuelle Quellen prüfen
 
 Lies die aktuellen Implementierungen von:
@@ -46,8 +60,9 @@ Schreibfähigkeit als unterstützt melden.
 
 ## 2. Gemeinsamen MSP-Vertrag zuerst liefern
 
-Erstelle vor der Suite-Geräteanbindung einen versionierten Vertragsentwurf,
-übergebe ihn dem Suite-Agenten und prüfe ihn gegen dessen Queue-/Funktransport.
+Nutze den bestehenden Contract v1 auf fork-lokalem MSP2 0x5FE0 und die gemeinsamen
+Fixtures. Stimme erforderliche Erweiterungen vor der Suite-Geräteanbindung ab
+und prüfe sie gegen deren Queue-/Funktransport.
 Er muss mindestens spezifizieren:
 - CAPS ohne Motorpin-Änderung; unterstützte Ziele/Backends/Schreibfähigkeiten;
 - OPEN, STATUS, GET, SET, SAVE, CLOSE mit exakten Request-/Reply-Layouts;
@@ -87,7 +102,8 @@ VERIFY, ERROR, CLOSING, RELEASE und gegebenenfalls RESTART_REQUIRED.
    WAIT_ESC_POWER an die Suite melden; keine automatische Stromschaltung
    unterstellen. Elektrische Pegel und Halbduplex-Turnaround am Bench prüfen.
 4. Mit info die ESCape32-Identität und Revision prüfen. Unbekannte Identitäten
-   nicht beschreiben; unbekannte Revisionen höchstens begrenzt lesend behandeln.
+   nicht beschreiben; unbekannte Revisionen nur identifizieren und
+   Parameter-GET/SET/SAVE ablehnen.
 5. MSP-Handler starten oder pollen Arbeit. Kein Busy-Wait für Sekunden,
    kein blockierendes Lesen im MSP-Callback. Fristen im Scheduler abarbeiten.
    Begrenzte statische Puffer und explizite Längen verwenden.
@@ -172,10 +188,10 @@ Dokumentationsrepository. Keine Hardwarefreigabe allein aus Parser-Unit-Tests.
   Nur mit USE_ESCAPE32_FORWARD_PROGRAMMING aktiv; kein Target definiert dieses
   Flag standardmäßig. Keine globale API-/Releaseversion geändert.
 - Scheduler: taskMain tickt den Core unabhängig vom MSP-Heartbeat.
-- Physischer Adapter fehlt absichtlich. Auch mit aktiviertem Flag meldet CAPS
+- Physischer Adapter ist noch ausstehend. Auch mit aktiviertem Flag meldet CAPS
   nur corePresent, backend0, targetMask0 und keine Read-/Write-Capabilities.
   OPEN wird ohne Pinänderung als unsupported beantwortet.
-- Bekannte ESC17.2- und ESC17.3-Identitäten erhalten Schema1; unbekannte Revisionen sind nur
+- Bekannte ESC17.2- und ESC17.3-Identitäten erhalten Schema 1; unbekannte Revisionen sind nur
   identifizierbar, GET/SET/SAVE werden abgewiesen.
 - SET liest alle neun freigegebenen Keys erneut und prüft die Frequenzrelation.
   SAVE bestätigt nur CLI-Abschluss, keine Persistenz über Stromunterbrechung.
@@ -213,8 +229,8 @@ erfolgreich mit ASAN_OPTIONS=detect_leaks=0. LeakSanitizer ist wegen ptrace in d
 Arbeitsumgebung nicht ausführbar. Der Core verwendet keine Heap-Allokation.
 Eine separate GitHub-Actions-Workflowdatei führt den portablen Harness aus.
 Sie enthält außerdem eine STM32F7X2-ARM-Buildmatrix mit deaktivierter und
-aktivierter USE_ESCAPE32_FORWARD_PROGRAMMING-Option. Der Workflow ist vorbereitet;
-ein tatsächlicher CI-Erfolg muss nach dem Branch-Push separat geprüft werden.
+aktivierter USE_ESCAPE32_FORWARD_PROGRAMMING-Option. Die erfolgreichen
+CI-Läufe mit zugehörigen Codecommits sind nachfolgend verlinkt.
 
 STM32F7X2-Builds mit Feature aus/an sind inzwischen in GitHub Actions bestanden
 (siehe nachfolgenden Nachweis). Echte Motorpin-Kommunikation, CLI-Eintritt/Recovery,
@@ -252,7 +268,7 @@ Der Test liegt in der Suite unter bin/escape32/verify_bridge.py.
 Die Nutzerkonfiguration und der physische Folgeauftrag stehen in
 [escape32-rf007.md](escape32-rf007.md). Standard-MOTOR1 ist PA09/TIM1_CH2 auf dem
 STM32F722. Dies aktiviert keine Ziel-Capability und ersetzt keinen RX-/Recoverytest.
-Schema1 akzeptiert explizit 17.2 und 17.3 nach Vergleich der byteidentischen
+Schema 1 akzeptiert explizit 17.2 und 17.3 nach Vergleich der byteidentischen
 Parameter-/CLI-/checkcfg-Quellen; unbekannte 17.4/16.3 bleiben gesperrt.
 
 Codecommit [118af7e9bb516e4b4eda6c24f2f49cf60cd88480](https://github.com/garfield2412/rotorflight-firmware/commit/118af7e9bb516e4b4eda6c24f2f49cf60cd88480):
@@ -260,3 +276,12 @@ Codecommit [118af7e9bb516e4b4eda6c24f2f49cf60cd88480](https://github.com/garfiel
 erfolgreich mit nativem Core/Sanitizern und STM32F7X2 Feature aus/an.
 Die aktualisierte Suite testet diesen gepinnten Companion ebenfalls erfolgreich
 in [Run 40831340474](https://github.com/garfield2412/rotorflight-lua-ethos-suite/actions/runs/40831340474).
+
+### Übergabe an den Hardwaretreiber
+
+Nächster Auftrag: [escape32-wifi-port.md](escape32-wifi-port.md). Die Suite spricht
+weiter ausschließlich MSP; die Firmware übernimmt den ESC-seitigen UART-/Timer-
+Transport. Übergabe umfasst Treiberdiff, begründete Ressourcenwahl, echte
+TX/RX-Aufzeichnungen und getrennte Test-/Bench-Nachweise. Die Wi-Fi-Referenz
+belegt ESC-Kommandos und Antworten, nicht den RF007-Steckerpfad. Keine
+Capability-Erweiterung allein aufgrund dieser Dokumentation.
